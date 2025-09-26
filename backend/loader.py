@@ -1,126 +1,197 @@
-# ELI5: load polygons, build spatial index, load CSV lookups and votes.
+# backend/loader.py
+# Robust loader for districts + floterials + key votes.
+# - Finds data in backend/data OR ../data
+# - Safely builds Polygon/MultiPolygon (coerces coords to float)
+# - Skips truly bad features instead of crashing
+# - Minimal deps (no rtree needed)
 
-import json, os
+import os
+import json
 import pandas as pd
-from shapely.geometry import shape, Point
+from shapely.geometry import Polygon, MultiPolygon, Point
+from shapely.geometry import shape as _shape
 from shapely.prepared import prep
 
-# Optional fast index
-try:
-    from rtree import index as rtree_index
-    HAS_RTREE = True
-except Exception:
-    HAS_RTREE = False
+# ---------------------------
+# Data paths (with fallback)
+# ---------------------------
+HERE = os.path.dirname(__file__)
+DATA_DIR = os.path.join(HERE, "data")
+if not os.path.exists(os.path.join(DATA_DIR, "nh_house_districts.json")):
+    # Repo-root /data fallback
+    DATA_DIR = os.path.abspath(os.path.join(HERE, "..", "data"))
 
-DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
-GJ_PATH = os.path.join(DATA_DIR, "nh_house_districts.json")
+GJ_PATH      = os.path.join(DATA_DIR, "nh_house_districts.json")
 FLOT_BY_BASE = os.path.join(DATA_DIR, "floterial_by_base.csv")
 FLOT_BY_TOWN = os.path.join(DATA_DIR, "floterial_by_town.csv")
-VOTES_CSV = os.path.join(DATA_DIR, "house_key_votes.csv")
+VOTES_CSV    = os.path.join(DATA_DIR, "house_key_votes.csv")
 
+
+# ---------------------------
+# Geometry helpers
+# ---------------------------
+def _f_ring(ring):
+    # force numeric tuples; tolerate strings/decimals
+    out = []
+    for pt in ring:
+        # pt can be (x,y) or [x,y]
+        x, y = pt[0], pt[1]
+        out.append((float(x), float(y)))
+    return out
+
+def _safe_shape(geom):
+    """
+    Try shapely.shape; if it chokes on odd MultiPolygons, rebuild manually.
+    """
+    try:
+        return _shape(geom)
+    except Exception:
+        t = (geom or {}).get("type")
+        coords = geom.get("coordinates", []) if geom else []
+        if t == "Polygon":
+            if not coords:
+                return Polygon()
+            ext = _f_ring(coords[0])
+            holes = [_f_ring(r) for r in coords[1:]] if len(coords) > 1 else []
+            return Polygon(ext, holes=holes)
+        if t == "MultiPolygon":
+            polys = []
+            for poly in coords:
+                if not poly:
+                    continue
+                ext = _f_ring(poly[0])
+                holes = [_f_ring(r) for r in poly[1:]] if len(poly) > 1 else []
+                polys.append(Polygon(ext, holes=holes))
+            return MultiPolygon(polys)
+        # Last try: pass through
+        return _shape(geom)
+
+
+# ---------------------------
+# District spatial index
+# ---------------------------
 class DistrictIndex:
     def __init__(self, features):
-        # Store: [(geom, props, prepared_geom)]
-        self.features = []
-        for f in features:
-            geom = shape(f["geometry"])
-            props = f.get("properties", {})
-            base_id = props.get("basehse22") or props.get("district") or props.get("DISTRICT") or props.get("name")
-            props["_district_id"] = str(base_id)
-            self.features.append((geom, props, prep(geom)))
-
-        # Optional R-tree over polygon bounds
-        self._rt = None
-        if HAS_RTREE:
-            idx = rtree_index.Index()
-            for i, (geom, _, __) in enumerate(self.features):
-                idx.insert(i, geom.bounds)
-            self._rt = idx
+        self.features = []  # list of (geom, props, prepared)
+        skipped = 0
+        for i, f in enumerate(features):
+            try:
+                geom = _safe_shape(f.get("geometry"))
+                if geom.is_empty:
+                    skipped += 1
+                    continue
+                props = f.get("properties", {}) or {}
+                base_id = (
+                    props.get("basehse22")
+                    or props.get("DISTRICT")
+                    or props.get("district")
+                    or props.get("name")
+                    or f"IDX_{i}"
+                )
+                props["_district_id"] = str(base_id)
+                self.features.append((geom, props, prep(geom)))
+            except Exception as e:
+                print(f"[loader] WARN skip feature {i}: {e}")
+                skipped += 1
+        print(f"[loader] Loaded {len(self.features)} districts, skipped {skipped}")
 
     def pip_first(self, lon, lat):
-        p = Point(lon, lat)
-        # R-tree candidate list or full scan
-        candidates = range(len(self.features))
-        if self._rt:
-            candidates = self._rt.intersection((lon, lat, lon, lat))
-        for i in candidates:
-            geom, props, prepared = self.features[i]
-            # Use prepared.contains OR covers; points-on-border are tricky
+        p = Point(float(lon), float(lat))
+        # simple scan w/ prepared geometries (fast enough for NH)
+        for geom, props, prepared in self.features:
             if prepared.covers(p):
                 return props["_district_id"], props
         return None, None
 
+
 def load_geoindex():
+    if not os.path.exists(GJ_PATH):
+        raise FileNotFoundError(f"Missing GeoJSON: {GJ_PATH}")
     with open(GJ_PATH, "r", encoding="utf-8") as f:
         gj = json.load(f)
-    feats = gj["features"]
+
+    # Feature collection or plain list
+    if isinstance(gj, dict) and "features" in gj:
+        feats = gj["features"]
+    elif isinstance(gj, list):
+        feats = gj
+    else:
+        raise ValueError("Unsupported GeoJSON structure for districts")
+
     return DistrictIndex(feats)
 
+
+# ---------------------------
+# Floterial lookups
+# ---------------------------
 def load_floterials():
     """
-    Returns two maps:
+    Returns:
       base_to_flots: dict[str, set[str]]
-      town_to_flots: dict[str, set[str]]   (town name normalized uppercase)
+      town_to_flots: dict[str, set[str]]  (town uppercased)
     """
-    base_to_flots = {}
-    town_to_flots = {}
+    base_to_flots, town_to_flots = {}, {}
+
     if os.path.exists(FLOT_BY_BASE):
         dfb = pd.read_csv(FLOT_BY_BASE, dtype=str).fillna("")
-        # Expect columns like base_district, floterial_district (or similar)
-        bcol = next((c for c in dfb.columns if c.lower().startswith("base")), "base_district")
-        fcol = next((c for c in dfb.columns if c.lower().startswith("flot")), "floterial_district")
+        # detect column names
+        base_col = next((c for c in dfb.columns if c.lower().startswith("base")), "base_district")
+        flot_col = next((c for c in dfb.columns if c.lower().startswith("flot")), "floterial_district")
         for _, r in dfb.iterrows():
-            b = str(r[bcol]).strip()
-            f = str(r[fcol]).strip()
-            if not b or not f: 
-                continue
-            base_to_flots.setdefault(b, set()).add(f)
+            b = str(r.get(base_col, "")).strip()
+            f = str(r.get(flot_col, "")).strip()
+            if b and f:
+                base_to_flots.setdefault(b, set()).add(f)
 
     if os.path.exists(FLOT_BY_TOWN):
         dft = pd.read_csv(FLOT_BY_TOWN, dtype=str).fillna("")
-        # Expect columns like town, floterial_district
-        tcol = next((c for c in dft.columns if c.lower() in ("town", "municipality")), "town")
-        fcol = next((c for c in dft.columns if c.lower().startswith("flot")), "floterial_district")
+        town_col = next((c for c in dft.columns if c.lower() in ("town", "municipality")), "town")
+        flot_col = next((c for c in dft.columns if c.lower().startswith("flot")), "floterial_district")
         for _, r in dft.iterrows():
-            t = str(r[tcol]).strip().upper()
-            f = str(r[fcol]).strip()
-            if not t or not f:
-                continue
-            town_to_flots.setdefault(t, set()).add(f)
+            t = str(r.get(town_col, "")).strip().upper()
+            f = str(r.get(flot_col, "")).strip()
+            if t and f:
+                town_to_flots.setdefault(t, set()).add(f)
 
+    print(f"[loader] floterials: base={len(base_to_flots)} town={len(town_to_flots)}")
     return base_to_flots, town_to_flots
 
+
+# ---------------------------
+# Votes / roster
+# ---------------------------
 def load_votes():
     """
-    Load wide votes CSV. Returns:
+    Load wide votes CSV.
+
+    Returns:
       reps_by_district: dict[str, list[rep_id]]
-      rep_info: dict[rep_id] -> {name, party, district, votes{col->value}}
-      vote_columns: list[str] (the key-vote headers)
+      rep_info: dict[rep_id] -> {id,name,party,district,votes{col->val}}
+      vote_columns: list[str]
     """
+    if not os.path.exists(VOTES_CSV):
+        raise FileNotFoundError(f"Missing votes CSV: {VOTES_CSV}")
     df = pd.read_csv(VOTES_CSV, dtype=str).fillna("")
-    # Normalize expected minimal columns:
-    # openstates_person_id, name, district, Party, then vote columns
+
+    # detect standard columns
     lower = {c.lower(): c for c in df.columns}
-    name_col = lower.get("name", "name")
-    dist_col = lower.get("district", "district")
+    name_col  = lower.get("name", "name")
+    dist_col  = lower.get("district", "district")
     party_col = next((c for c in df.columns if c.lower() in ("party","parties","affiliation")), "Party")
-    # create a stable rep_id (prefer openstates id else name|district)
-    if "openstates_person_id" in df.columns:
-        rep_id_series = df["openstates_person_id"].replace("", pd.NA)
-    else:
-        rep_id_series = pd.Series([None]*len(df))
 
     vote_cols = [c for c in df.columns if c not in (name_col, dist_col, party_col, "openstates_person_id")]
+
     reps_by_district = {}
     rep_info = {}
 
     for _, row in df.iterrows():
         rid = row.get("openstates_person_id", "") or f"{row[name_col]}|{row[dist_col]}"
-        nm = row[name_col].strip()
+        nm = str(row[name_col]).strip()
         dist = str(row[dist_col]).strip()
-        party = row[party_col].strip()
+        party = str(row[party_col]).strip()
         votes = {col: str(row[col]).strip() for col in vote_cols}
         rep_info[rid] = {"id": rid, "name": nm, "party": party, "district": dist, "votes": votes}
         reps_by_district.setdefault(dist, []).append(rid)
 
+    print(f"[loader] votes: reps={len(rep_info)} vote_cols={len(vote_cols)}")
     return reps_by_district, rep_info, vote_cols
