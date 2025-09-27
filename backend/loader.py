@@ -173,3 +173,21 @@ def load_votes():
         reps_by_district.setdefault(dist, []).append(rid)
     print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)}")
     return reps_by_district, rep_info, vote_cols
+reps_by_district = {}
+rep_info = {}
+
+for _, row in df.iterrows():
+    rid = row.get("openstates_person_id", "") or f"{row[name_col]}|{row[dist_col]}"
+    nm  = str(row[name_col]).strip()
+    dist= str(row[dist_col]).strip()
+    par = str(row[party_col]).strip()
+    votes = {col: str(row[col]).strip() for col in vote_cols}
+
+    rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
+
+    for key in district_key_variants(dist):
+        reps_by_district.setdefault(key, []).append(rid)
+
+print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)} keys={len(reps_by_district)}")
+return reps_by_district, rep_info, vote_cols
+
