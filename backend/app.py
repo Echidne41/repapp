@@ -58,9 +58,14 @@ def lookup():
     town = _town_from_props(base_props).upper()
     if town and town in TOWN_TO_FLOTS: districts |= TOWN_TO_FLOTS[town]
 
+    # build all keys for each district we found (base + floterials)
+    from loader import district_key_variants  # add this import at top with others
+
     rep_ids = []
     for d in districts:
-        rep_ids.extend(REPS_BY_DIST.get(str(d), []))
+        for k in district_key_variants(str(d)):
+            rep_ids.extend(REPS_BY_DIST.get(k, []))
+
 
     seen, out = set(), []
     for rid in rep_ids:
