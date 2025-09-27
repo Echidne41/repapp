@@ -208,6 +208,7 @@ def load_votes():
     dist_col  = lower.get("district","district")
     party_col = next((c for c in df.columns if c.lower() in ("party","parties","affiliation")), "Party")
     vote_cols = [c for c in df.columns if c not in (name_col, dist_col, party_col, "openstates_person_id")]
+    
     reps_by_district, rep_info = {}, {}
     for _, row in df.iterrows():
         rid = row.get("openstates_person_id","") or f"{row[name_col]}|{row[dist_col]}"
@@ -216,9 +217,13 @@ def load_votes():
         par = str(row[party_col]).strip()
         votes = {col: str(row[col]).strip() for col in vote_cols}
         rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
-        reps_by_district.setdefault(dist, []).append(rid)
-    print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)}")
-    return reps_by_district, rep_info, vote_cols
+
+        for key in district_key_variants(dist):
+            reps_by_district.setdefault(key, []).append(rid)
+
+print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)} keys={len(reps_by_district)}")
+return reps_by_district, rep_info, vote_cols
+
 reps_by_district = {}
 rep_info = {}
 
