@@ -1,244 +1,164 @@
-import os, json
+import json, os, re
+from dataclasses import dataclass
+from typing import Dict, List, Tuple, Iterable
 import pandas as pd
-from shapely.geometry import Polygon, MultiPolygon, Point
-from shapely.geometry import shape as _shape
-from shapely.ops import unary_union
-from shapely.validation import make_valid
-from shapely.prepared import prep
+from shapely.geometry import shape, Point
 
-import re
+# --------- paths ---------
+HERE = os.path.dirname(__file__)
+DATA_DIR = os.environ.get("NHRF_DATA_DIR") or os.path.join(HERE, "data")
+GJ_PATH   = os.path.join(DATA_DIR, "nh_house_districts.json")
+VOTES_CSV = os.path.join(DATA_DIR, "house_key_votes.csv")
+FLOT_BASE = os.path.join(DATA_DIR, "floterial_by_base.csv")
+FLOT_TOWN = os.path.join(DATA_DIR, "floterial_by_town.csv")
 
-COUNTY_ABBR = {
-    "BELKNAP":"BE","CARROLL":"CA","CHESHIRE":"CH","COOS":"CO",
-    "GRAFTON":"GR","HILLSBOROUGH":"HI","MERRIMACK":"ME",
-    "ROCKINGHAM":"RO","STRAFFORD":"ST","SULLIVAN":"SU"
+# --------- district key normalization ---------
+COUNTY_2_TO_3 = {
+    "BE":"BEL", "CA":"CAR", "CH":"CHE", "CO":"COO",
+    "GR":"GRA", "HI":"HIL", "ME":"MER",
+    "RO":"ROC", "ST":"STR", "SU":"SUL",
 }
-ABBR_TO_COUNTY = {v:k for k,v in COUNTY_ABBR.items()}
+COUNTY_3_TO_2 = {v:k for k,v in COUNTY_2_TO_3.items()}
+COUNTY_LONG   = {
+    "BEL":"BELKNAP", "CAR":"CARROLL", "CHE":"CHESHIRE", "COO":"COOS",
+    "GRA":"GRAFTON", "HIL":"HILLSBOROUGH", "MER":"MERRIMACK",
+    "ROC":"ROCKINGHAM", "STR":"STRAFFORD", "SUL":"SULLIVAN",
+}
+LONG_TO_3 = {v:k for k,v in COUNTY_LONG.items()}
 
-def _digits(s): return "".join(ch for ch in s if ch.isdigit())
+def _digits(s:str)->str: return "".join(ch for ch in s if ch.isdigit())
 
-def district_key_variants(txt: str):
-    """Return many equivalent keys for a district label."""
+def district_key_variants(txt: str) -> set:
+    """Generate many equivalent keys for a district."""
     if not txt: return set()
     s = str(txt).strip()
-    out = set()
-
-    # raw forms
-    out |= {s, s.upper(), s.title(), s.replace("-", " ").strip(), s.replace("-", "").strip()}
+    out = {s, s.upper(), s.title()}
 
     U = s.upper().replace(".", " ").replace("_", " ").strip()
     U = re.sub(r"\s+", " ", U)
 
-    # 'MERRIMACK 18' / 'MERRIMACK-18' -> ME18 + long forms
-    m = re.match(r"^(BELKNAP|CARROLL|CHESHIRE|COOS|GRAFTON|HILLSBOROUGH|MERRIMACK|ROCKINGHAM|STRAFFORD|SULLIVAN)[ -]*(\d+)", U)
+    # Form: 'MERRIMACK 18' (or hyphen)
+    m = re.match(r"^(BELKNAP|CARROLL|CHESHIRE|COOS|GRAFTON|HILLSBOROUGH|MERRIMACK|ROCKINGHAM|STRAFFORD|SULLIVAN)[ -]*(\d+)$", U)
     if m:
-        county, num = m.group(1), m.group(2)
-        code = COUNTY_ABBR[county] + num.lstrip("0")
-        long1 = f"{county} {int(num)}"
-        long2 = f"{county}-{int(num)}"
-        out |= {code, code.upper(), long1, long2, long1.title(), long2.title()}
+        long_cnt, num = m.group(1), str(int(m.group(2)))
+        c3 = LONG_TO_3[long_cnt]
+        c2 = COUNTY_3_TO_2[c3]
+        out |= {
+            f"{long_cnt} {num}", f"{long_cnt}-{num}",
+            f"{c3} {num}", f"{c2}{num}", f"{c3}{num}",  # allow no-space codes too
+        }
 
-    # 'ME18' -> 'MERRIMACK 18' variants
-    m2 = re.match(r"^([A-Z]{2})(\d+)$", U)
-    if m2 and m2.group(1) in ABBR_TO_COUNTY:
-        county = ABBR_TO_COUNTY[m2.group(1)]
-        num = m2.group(2).lstrip("0") or "0"
-        long1 = f"{county} {int(num)}"
-        long2 = f"{county}-{int(num)}"
-        out |= {U, long1, long2, long1.title(), long2.title()}
+    # Form: 'MER 18' (or 'MER18')
+    m = re.match(r"^([A-Z]{3})\s*(\d+)$", U)
+    if m and m.group(1) in COUNTY_3_TO_2:
+        c3, num = m.group(1), str(int(m.group(2)))
+        long_cnt = COUNTY_LONG[c3]
+        c2 = COUNTY_3_TO_2[c3]
+        out |= {f"{c3} {num}", f"{c2}{num}", f"{long_cnt} {num}", f"{long_cnt}-{num}"}
 
-    # strip parentheticals / trailing town notes
+    # Form: 'ME18'
+    m = re.match(r"^([A-Z]{2})(\d+)$", U)
+    if m and m.group(1) in COUNTY_2_TO_3:
+        c2, num = m.group(1), str(int(m.group(2)))
+        c3 = COUNTY_2_TO_3[c2]
+        long_cnt = COUNTY_LONG[c3]
+        out |= {f"{c2}{num}", f"{c3} {num}", f"{long_cnt} {num}", f"{long_cnt}-{num}"}
+
+    # Strip parentheses
     U2 = re.sub(r"\s*\(.*?\)\s*$", "", U)
     if U2 != U:
-        out |= {U2, U2.title(), U2.replace("-", " "), U2.replace("-", "")}
+        out |= {U2, U2.title()}
 
-    return {k.strip() for k in out if k.strip()}
+    return {k.strip() for k in out if k and k.strip()}
 
-# ---- Data dir resolution: ENV -> backend/data -> ../data
-HERE = os.path.dirname(__file__)
-DATA_DIR = os.getenv("NHRF_DATA_DIR") or os.path.join(HERE, "data")
-if not os.path.exists(os.path.join(DATA_DIR, "nh_house_districts.json")):
-    DATA_DIR = os.path.abspath(os.path.join(HERE, "..", "data"))
-
-GJ_PATH      = os.path.join(DATA_DIR, "nh_house_districts.json")
-FLOT_BY_BASE = os.path.join(DATA_DIR, "floterial_by_base.csv")
-FLOT_BY_TOWN = os.path.join(DATA_DIR, "floterial_by_town.csv")
-VOTES_CSV    = os.path.join(DATA_DIR, "house_key_votes.csv")
-
-COUNTY_ABBR = {
-    "BELKNAP":"BE","CARROLL":"CA","CHESHIRE":"CH","COOS":"CO",
-    "GRAFTON":"GR","HILLSBOROUGH":"HI","MERRIMACK":"ME",
-    "ROCKINGHAM":"RO","STRAFFORD":"ST","SULLIVAN":"SU"
-}
-ABBR_TO_COUNTY = {v:k.title() for k,v in COUNTY_ABBR.items()}
-
-def district_key_variants(txt: str):
-    """Return all reasonable keys for one district label/code."""
-    if not txt:
-        return set()
-    s = str(txt).strip()
-    out = {s, s.upper(), s.title()}
-    # “Merrimack 18” -> “ME18”
-    parts = s.strip().upper().split()
-    if len(parts) == 2 and parts[0] in COUNTY_ABBR:
-        code = COUNTY_ABBR[parts[0]] + ''.join(ch for ch in parts[1] if ch.isdigit())
-        if code:
-            out |= {code, code.upper()}
-    # “ME18” -> “Merrimack 18”
-    up = s.upper()
-    if len(up) >= 3 and up[:2] in ABBR_TO_COUNTY and up[2:].isdigit():
-        county = ABBR_TO_COUNTY[up[:2]]
-        num = str(int(up[2:]))
-        longform = f"{county} {num}"
-        out |= {longform, longform.upper(), longform.title()}
-    return {k.strip() for k in out if k.strip()}
-
-def _f_ring(ring):
-    out = []
-    for pt in ring:
-        x, y = pt[0], pt[1]
-        out.append((float(x), float(y)))
-    return out
-
-def _poly_from_coords(coords):
-    if not coords:
-        return Polygon()
-    ext  = _f_ring(coords[0])
-    holes = [_f_ring(r) for r in coords[1:]] if len(coords) > 1 else []
-    return Polygon(ext, holes=holes)
-
-def _safe_shape(geom):
-    """Return a valid (Multi)Polygon from messy GeoJSON."""
-    try:
-        g = _shape(geom)
-    except Exception:
-        t = (geom or {}).get("type")
-        if t == "Polygon":
-            g = _poly_from_coords(geom.get("coordinates", []))
-        elif t == "MultiPolygon":
-            polys = []
-            for poly in geom.get("coordinates", []):
-                if poly: polys.append(_poly_from_coords(poly))
-            g = MultiPolygon(polys)
-        elif t == "GeometryCollection":
-            # Collect any polygonal parts
-            parts = []
-            for sub in (geom.get("geometries") or []):
-                try:
-                    sg = _safe_shape(sub)
-                    if not sg.is_empty: parts.append(sg)
-                except Exception:
-                    pass
-            g = unary_union(parts) if parts else Polygon()
-        else:
-            # last-ditch: try again
-            g = _shape(geom)
-
-    # Repair invalid/self-intersecting shapes
-    try:
-        if not g.is_valid:
-            g = make_valid(g)
-    except Exception:
-        try:
-            g = g.buffer(0)  # classic fix
-        except Exception:
-            pass
-    return g
+# --------- geometry index ---------
+@dataclass
+class DistrictPoly:
+    code: str  # e.g. ME18, MER 18, etc.
+    geom: object
 
 class DistrictIndex:
-    def __init__(self, features):
-        self.features = []  # (geom, props, prepared)
-        skipped = 0
-        for i, f in enumerate(features):
+    def __init__(self, feats: Iterable[dict]):
+        self.items: List[DistrictPoly] = []
+        for f in feats:
             try:
-                geom = _safe_shape(f.get("geometry"))
-                if geom.is_empty:
-                    skipped += 1; continue
-                props = f.get("properties", {}) or {}
-                base_id = (props.get("basehse22") or props.get("DISTRICT")
-                           or props.get("district") or props.get("name")
-                           or f"IDX_{i}")
-                props["_district_id"] = str(base_id)
-                self.features.append((geom, props, prep(geom)))
+                geom = shape(f["geometry"])
+                code = str(f["properties"].get("CODE") or f["properties"].get("code") or f["properties"].get("District") or "").strip()
+                if not code:
+                    # Try to build from fields like county + number
+                    county = str(f["properties"].get("county") or "").strip().upper()
+                    num = str(f["properties"].get("number") or "").strip()
+                    if county and num and county in LONG_TO_3:
+                        code = COUNTY_3_TO_2[LONG_TO_3[county]] + str(int(_digits(num) or "0"))
+                if not code: 
+                    continue
+                self.items.append(DistrictPoly(code=code, geom=geom))
             except Exception as e:
-                print(f"[loader] WARN skip feature {i}: {e}")
-                skipped += 1
-        print(f"[loader] Loaded {len(self.features)} districts, skipped {skipped}")
+                # Skip anything Shapely can't build
+                continue
 
-    def pip_first(self, lon, lat):
-        p = Point(float(lon), float(lat))
-        for geom, props, prepared in self.features:
-            if prepared.covers(p):
-                return props["_district_id"], props
-        return None, None
+    def lookup(self, pt: Point) -> List[str]:
+        hits = []
+        for it in self.items:
+            try:
+                if it.geom.contains(pt):
+                    hits.append(it.code)
+            except Exception:
+                pass
+        return hits
 
-def load_geoindex():
+# --------- loaders ---------
+def load_geoindex() -> DistrictIndex:
     if not os.path.exists(GJ_PATH):
         raise FileNotFoundError(f"Missing GeoJSON: {GJ_PATH}")
     with open(GJ_PATH, "r", encoding="utf-8") as f:
         gj = json.load(f)
-    feats = gj["features"] if isinstance(gj, dict) and "features" in gj else gj
+    feats = gj["features"] if "features" in gj else gj
     return DistrictIndex(feats)
 
-def load_floterials():
-    base_to_flots, town_to_flots = {}, {}
-    if os.path.exists(FLOT_BY_BASE):
-        dfb = pd.read_csv(FLOT_BY_BASE, dtype=str).fillna("")
-        bcol = next((c for c in dfb.columns if c.lower().startswith("base")), "base_district")
-        fcol = next((c for c in dfb.columns if c.lower().startswith("flot")), "floterial_district")
+def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    def load_csv(path):
+        return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
+    dfb = load_csv(FLOT_BASE)
+    dft = load_csv(FLOT_TOWN)
+    base_to_flots = {}
+    town_to_flots = {}
+    if not dfb.empty:
         for _, r in dfb.iterrows():
-            b = str(r.get(bcol, "")).strip(); f = str(r.get(fcol, "")).strip()
-            if b and f: base_to_flots.setdefault(b, set()).add(f)
-    if os.path.exists(FLOT_BY_TOWN):
-        dft = pd.read_csv(FLOT_BY_TOWN, dtype=str).fillna("")
-        tcol = next((c for c in dft.columns if c.lower() in ("town","municipality")), "town")
-        fcol = next((c for c in dft.columns if c.lower().startswith("flot")), "floterial_district")
+            base = str(r.get("base_district") or r.get("base") or "").strip()
+            flot = str(r.get("floterial") or r.get("flot") or "").strip()
+            for k in district_key_variants(base):
+                base_to_flots.setdefault(k, []).append(flot)
+    if not dft.empty:
         for _, r in dft.iterrows():
-            t = str(r.get(tcol, "")).strip().upper(); f = str(r.get(fcol, "")).strip()
-            if t and f: town_to_flots.setdefault(t, set()).add(f)
-    print(f"[loader] floterials base={len(base_to_flots)} town={len(town_to_flots)}")
+            town = str(r.get("town") or "").strip().upper()
+            flot = str(r.get("floterial") or r.get("flot") or "").strip()
+            if town:
+                town_to_flots.setdefault(town, []).append(flot)
     return base_to_flots, town_to_flots
 
-def load_votes():
+def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[str]]:
     if not os.path.exists(VOTES_CSV):
         raise FileNotFoundError(f"Missing votes CSV: {VOTES_CSV}")
-    df = pd.read_csv(VOTES_CSV, dtype=str).fillna("")
-    lower = {c.lower(): c for c in df.columns}
-    name_col  = lower.get("name","name")
-    dist_col  = lower.get("district","district")
-    party_col = next((c for c in df.columns if c.lower() in ("party","parties","affiliation")), "Party")
+    df = pd.read_csv(VOTES_CSV)
+    # flexible column names
+    name_col  = next(c for c in df.columns if c.lower() in ("name","rep","representative"))
+    dist_col  = next(c for c in df.columns if "district" in c.lower())
+    party_col = next(c for c in df.columns if "party" in c.lower())
+
     vote_cols = [c for c in df.columns if c not in (name_col, dist_col, party_col, "openstates_person_id")]
-    
-    reps_by_district, rep_info = {}, {}
+    reps_by_district: Dict[str, List[str]] = {}
+    rep_info: Dict[str, dict] = {}
+
     for _, row in df.iterrows():
-        rid = row.get("openstates_person_id","") or f"{row[name_col]}|{row[dist_col]}"
+        rid = str(row.get("openstates_person_id") or f"{row[name_col]}|{row[dist_col]}")
         nm  = str(row[name_col]).strip()
         dist= str(row[dist_col]).strip()
         par = str(row[party_col]).strip()
-        votes = {col: str(row[col]).strip() for col in vote_cols}
-        rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
+        votes = {col: ("" if pd.isna(row[col]) else str(row[col]).strip()) for col in vote_cols}
 
+        rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
         for key in district_key_variants(dist):
             reps_by_district.setdefault(key, []).append(rid)
 
-print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)} keys={len(reps_by_district)}")
-return reps_by_district, rep_info, vote_cols
-
-reps_by_district = {}
-rep_info = {}
-
-for _, row in df.iterrows():
-    rid = row.get("openstates_person_id", "") or f"{row[name_col]}|{row[dist_col]}"
-    nm  = str(row[name_col]).strip()
-    dist= str(row[dist_col]).strip()
-    par = str(row[party_col]).strip()
-    votes = {col: str(row[col]).strip() for col in vote_cols}
-
-    rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
-
-    for key in district_key_variants(dist):
-        reps_by_district.setdefault(key, []).append(rid)
-
-print(f"[loader] votes reps={len(rep_info)} cols={len(vote_cols)} keys={len(reps_by_district)}")
-return reps_by_district, rep_info, vote_cols
-
+    return reps_by_district, rep_info, vote_cols
