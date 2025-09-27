@@ -3,6 +3,54 @@ from flask_cors import CORS
 from dotenv import load_dotenv
 import os
 
+import re
+
+COUNTY_ABBR = {
+    "BELKNAP":"BE","CARROLL":"CA","CHESHIRE":"CH","COOS":"CO",
+    "GRAFTON":"GR","HILLSBOROUGH":"HI","MERRIMACK":"ME",
+    "ROCKINGHAM":"RO","STRAFFORD":"ST","SULLIVAN":"SU"
+}
+ABBR_TO_COUNTY = {v:k for k,v in COUNTY_ABBR.items()}
+
+def _digits(s): return "".join(ch for ch in s if ch.isdigit())
+
+def district_key_variants(txt: str):
+    """Return many equivalent keys for a district label."""
+    if not txt: return set()
+    s = str(txt).strip()
+    out = set()
+
+    # raw forms
+    out |= {s, s.upper(), s.title(), s.replace("-", " ").strip(), s.replace("-", "").strip()}
+
+    U = s.upper().replace(".", " ").replace("_", " ").strip()
+    U = re.sub(r"\s+", " ", U)
+
+    # 'MERRIMACK 18' / 'MERRIMACK-18' -> ME18 + long forms
+    m = re.match(r"^(BELKNAP|CARROLL|CHESHIRE|COOS|GRAFTON|HILLSBOROUGH|MERRIMACK|ROCKINGHAM|STRAFFORD|SULLIVAN)[ -]*(\d+)", U)
+    if m:
+        county, num = m.group(1), m.group(2)
+        code = COUNTY_ABBR[county] + num.lstrip("0")
+        long1 = f"{county} {int(num)}"
+        long2 = f"{county}-{int(num)}"
+        out |= {code, code.upper(), long1, long2, long1.title(), long2.title()}
+
+    # 'ME18' -> 'MERRIMACK 18' variants
+    m2 = re.match(r"^([A-Z]{2})(\d+)$", U)
+    if m2 and m2.group(1) in ABBR_TO_COUNTY:
+        county = ABBR_TO_COUNTY[m2.group(1)]
+        num = m2.group(2).lstrip("0") or "0"
+        long1 = f"{county} {int(num)}"
+        long2 = f"{county}-{int(num)}"
+        out |= {U, long1, long2, long1.title(), long2.title()}
+
+    # strip parentheticals / trailing town notes
+    U2 = re.sub(r"\s*\(.*?\)\s*$", "", U)
+    if U2 != U:
+        out |= {U2, U2.title(), U2.replace("-", " "), U2.replace("-", "")}
+
+    return {k.strip() for k in out if k.strip()}
+
 load_dotenv()
 
 from loader import load_geoindex, load_floterials, load_votes
