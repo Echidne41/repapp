@@ -139,7 +139,7 @@ def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     if not dfb.empty:
         for _, r in dfb.iterrows():
             base = str(r.get("base_district") or r.get("base") or "").strip()
-            flot = str(r.get("floterial") or r.get("flot") or "").strip()
+            flot = str(r.get("floterial_district") or (r.get("floterial") or r.get("flot") or "").strip()
             if not base or not flot:
                 continue
             for k in district_key_variants(base):
