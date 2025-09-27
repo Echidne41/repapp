@@ -6,6 +6,8 @@ from shapely.ops import unary_union
 from shapely.validation import make_valid
 from shapely.prepared import prep
 
+
+
 # ---- Data dir resolution: ENV -> backend/data -> ../data
 HERE = os.path.dirname(__file__)
 DATA_DIR = os.getenv("NHRF_DATA_DIR") or os.path.join(HERE, "data")
@@ -16,6 +18,34 @@ GJ_PATH      = os.path.join(DATA_DIR, "nh_house_districts.json")
 FLOT_BY_BASE = os.path.join(DATA_DIR, "floterial_by_base.csv")
 FLOT_BY_TOWN = os.path.join(DATA_DIR, "floterial_by_town.csv")
 VOTES_CSV    = os.path.join(DATA_DIR, "house_key_votes.csv")
+
+COUNTY_ABBR = {
+    "BELKNAP":"BE","CARROLL":"CA","CHESHIRE":"CH","COOS":"CO",
+    "GRAFTON":"GR","HILLSBOROUGH":"HI","MERRIMACK":"ME",
+    "ROCKINGHAM":"RO","STRAFFORD":"ST","SULLIVAN":"SU"
+}
+ABBR_TO_COUNTY = {v:k.title() for k,v in COUNTY_ABBR.items()}
+
+def district_key_variants(txt: str):
+    """Return all reasonable keys for one district label/code."""
+    if not txt:
+        return set()
+    s = str(txt).strip()
+    out = {s, s.upper(), s.title()}
+    # “Merrimack 18” -> “ME18”
+    parts = s.strip().upper().split()
+    if len(parts) == 2 and parts[0] in COUNTY_ABBR:
+        code = COUNTY_ABBR[parts[0]] + ''.join(ch for ch in parts[1] if ch.isdigit())
+        if code:
+            out |= {code, code.upper()}
+    # “ME18” -> “Merrimack 18”
+    up = s.upper()
+    if len(up) >= 3 and up[:2] in ABBR_TO_COUNTY and up[2:].isdigit():
+        county = ABBR_TO_COUNTY[up[:2]]
+        num = str(int(up[2:]))
+        longform = f"{county} {num}"
+        out |= {longform, longform.upper(), longform.title()}
+    return {k.strip() for k in out if k.strip()}
 
 def _f_ring(ring):
     out = []
