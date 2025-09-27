@@ -1,10 +1,10 @@
 import json, os, re
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Iterable
+from typing import Dict, List, Tuple, Iterable, Set
 import pandas as pd
 from shapely.geometry import shape, Point
 
-# --------- paths ---------
+# ---------- paths ----------
 HERE = os.path.dirname(__file__)
 DATA_DIR = os.environ.get("NHRF_DATA_DIR") or os.path.join(HERE, "data")
 GJ_PATH   = os.path.join(DATA_DIR, "nh_house_districts.json")
@@ -12,7 +12,7 @@ VOTES_CSV = os.path.join(DATA_DIR, "house_key_votes.csv")
 FLOT_BASE = os.path.join(DATA_DIR, "floterial_by_base.csv")
 FLOT_TOWN = os.path.join(DATA_DIR, "floterial_by_town.csv")
 
-# --------- district key normalization ---------
+# ---------- district key normalization ----------
 COUNTY_2_TO_3 = {
     "BE":"BEL", "CA":"CAR", "CH":"CHE", "CO":"COO",
     "GR":"GRA", "HI":"HIL", "ME":"MER",
@@ -26,8 +26,10 @@ COUNTY_LONG   = {
 }
 LONG_TO_3 = {v:k for k,v in COUNTY_LONG.items()}
 
-def district_key_variants(txt: str) -> set:
-    if not txt: return set()
+def district_key_variants(txt: str) -> Set[str]:
+    """Generate many equivalent keys for a district (ME18, MER 18, Merrimack 18, etc.)."""
+    if not txt:
+        return set()
     s = str(txt).strip()
     out = {s, s.upper(), s.title()}
 
@@ -42,7 +44,7 @@ def district_key_variants(txt: str) -> set:
         c2 = COUNTY_3_TO_2[c3]
         out |= {
             f"{long_cnt} {num}", f"{long_cnt}-{num}",
-            f"{c3} {num}", f"{c2}{num}", f"{c3}{num}",
+            f"{c3} {num}", f"{c2}{num}", f"{c3}{num}"
         }
 
     # 3-LETTER FORM: 'MER 18' or 'MER18'
@@ -68,7 +70,7 @@ def district_key_variants(txt: str) -> set:
 
     return {k.strip() for k in out if k.strip()}
 
-# --------- geometry index ---------
+# ---------- geometry index ----------
 @dataclass
 class DistrictPoly:
     code: str
@@ -82,9 +84,9 @@ class DistrictIndex:
                 geom = shape(f["geometry"])
                 props = f.get("properties", {})
 
-                # accept actual field names seen in NH file first
+                # accept actual NH fields first
                 base_id = (
-                    props.get("basehse22") or  # common in NH house base layer
+                    props.get("basehse22") or  # common in NH base layer
                     props.get("district")  or
                     props.get("DISTRICT")  or
                     props.get("CODE")      or
@@ -108,7 +110,7 @@ class DistrictIndex:
                 continue
 
     def lookup(self, pt: Point) -> List[str]:
-        hits = []
+        hits: List[str] = []
         for it in self.items:
             try:
                 if it.geom.contains(pt):
@@ -117,7 +119,7 @@ class DistrictIndex:
                 pass
         return hits
 
-# --------- loaders ---------
+# ---------- loaders ----------
 def load_geoindex() -> DistrictIndex:
     if not os.path.exists(GJ_PATH):
         raise FileNotFoundError(f"Missing GeoJSON: {GJ_PATH}")
@@ -131,19 +133,25 @@ def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
     dfb = load_csv(FLOT_BASE)
     dft = load_csv(FLOT_TOWN)
-    base_to_flots, town_to_flots = {}, {}
+    base_to_flots: Dict[str, List[str]] = {}
+    town_to_flots: Dict[str, List[str]] = {}
+
     if not dfb.empty:
         for _, r in dfb.iterrows():
             base = str(r.get("base_district") or r.get("base") or "").strip()
             flot = str(r.get("floterial") or r.get("flot") or "").strip()
+            if not base or not flot:
+                continue
             for k in district_key_variants(base):
                 base_to_flots.setdefault(k, []).append(flot)
+
     if not dft.empty:
         for _, r in dft.iterrows():
             town = str(r.get("town") or "").strip().upper()
             flot = str(r.get("floterial") or r.get("flot") or "").strip()
-            if town:
+            if town and flot:
                 town_to_flots.setdefault(town, []).append(flot)
+
     return base_to_flots, town_to_flots
 
 def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[str]]:
