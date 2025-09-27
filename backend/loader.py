@@ -26,10 +26,7 @@ COUNTY_LONG   = {
 }
 LONG_TO_3 = {v:k for k,v in COUNTY_LONG.items()}
 
-def _digits(s:str)->str: return "".join(ch for ch in s if ch.isdigit())
-
 def district_key_variants(txt: str) -> set:
-    """Generate many equivalent keys for a district."""
     if not txt: return set()
     s = str(txt).strip()
     out = {s, s.upper(), s.title()}
@@ -37,7 +34,7 @@ def district_key_variants(txt: str) -> set:
     U = s.upper().replace(".", " ").replace("_", " ").strip()
     U = re.sub(r"\s+", " ", U)
 
-    # Form: 'MERRIMACK 18' (or hyphen)
+    # LONG FORM: 'MERRIMACK 18' or 'MERRIMACK-18'
     m = re.match(r"^(BELKNAP|CARROLL|CHESHIRE|COOS|GRAFTON|HILLSBOROUGH|MERRIMACK|ROCKINGHAM|STRAFFORD|SULLIVAN)[ -]*(\d+)$", U)
     if m:
         long_cnt, num = m.group(1), str(int(m.group(2)))
@@ -45,10 +42,10 @@ def district_key_variants(txt: str) -> set:
         c2 = COUNTY_3_TO_2[c3]
         out |= {
             f"{long_cnt} {num}", f"{long_cnt}-{num}",
-            f"{c3} {num}", f"{c2}{num}", f"{c3}{num}",  # allow no-space codes too
+            f"{c3} {num}", f"{c2}{num}", f"{c3}{num}",
         }
 
-    # Form: 'MER 18' (or 'MER18')
+    # 3-LETTER FORM: 'MER 18' or 'MER18'
     m = re.match(r"^([A-Z]{3})\s*(\d+)$", U)
     if m and m.group(1) in COUNTY_3_TO_2:
         c3, num = m.group(1), str(int(m.group(2)))
@@ -56,7 +53,7 @@ def district_key_variants(txt: str) -> set:
         c2 = COUNTY_3_TO_2[c3]
         out |= {f"{c3} {num}", f"{c2}{num}", f"{long_cnt} {num}", f"{long_cnt}-{num}"}
 
-    # Form: 'ME18'
+    # 2-LETTER FORM: 'ME18'
     m = re.match(r"^([A-Z]{2})(\d+)$", U)
     if m and m.group(1) in COUNTY_2_TO_3:
         c2, num = m.group(1), str(int(m.group(2)))
@@ -64,17 +61,17 @@ def district_key_variants(txt: str) -> set:
         long_cnt = COUNTY_LONG[c3]
         out |= {f"{c2}{num}", f"{c3} {num}", f"{long_cnt} {num}", f"{long_cnt}-{num}"}
 
-    # Strip parentheses
+    # strip parentheses
     U2 = re.sub(r"\s*\(.*?\)\s*$", "", U)
     if U2 != U:
         out |= {U2, U2.title()}
 
-    return {k.strip() for k in out if k and k.strip()}
+    return {k.strip() for k in out if k.strip()}
 
 # --------- geometry index ---------
 @dataclass
 class DistrictPoly:
-    code: str  # e.g. ME18, MER 18, etc.
+    code: str
     geom: object
 
 class DistrictIndex:
@@ -83,18 +80,31 @@ class DistrictIndex:
         for f in feats:
             try:
                 geom = shape(f["geometry"])
-                code = str(f["properties"].get("CODE") or f["properties"].get("code") or f["properties"].get("District") or "").strip()
-                if not code:
-                    # Try to build from fields like county + number
-                    county = str(f["properties"].get("county") or "").strip().upper()
-                    num = str(f["properties"].get("number") or "").strip()
+                props = f.get("properties", {})
+
+                # accept actual field names seen in NH file first
+                base_id = (
+                    props.get("basehse22") or  # common in NH house base layer
+                    props.get("district")  or
+                    props.get("DISTRICT")  or
+                    props.get("CODE")      or
+                    props.get("code")      or
+                    props.get("name")
+                )
+                if not base_id:
+                    # optional build from county/number style props
+                    county = str(props.get("county") or "").strip().upper()
+                    num    = str(props.get("number") or props.get("dist") or "").strip()
                     if county and num and county in LONG_TO_3:
-                        code = COUNTY_3_TO_2[LONG_TO_3[county]] + str(int(_digits(num) or "0"))
-                if not code: 
+                        c3 = LONG_TO_3[county]
+                        base_id = COUNTY_3_TO_2[c3] + str(int(re.sub(r"\D","",num) or "0"))
+
+                if not base_id:
                     continue
+
+                code = str(base_id).strip()
                 self.items.append(DistrictPoly(code=code, geom=geom))
-            except Exception as e:
-                # Skip anything Shapely can't build
+            except Exception:
                 continue
 
     def lookup(self, pt: Point) -> List[str]:
@@ -121,8 +131,7 @@ def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         return pd.read_csv(path) if os.path.exists(path) else pd.DataFrame()
     dfb = load_csv(FLOT_BASE)
     dft = load_csv(FLOT_TOWN)
-    base_to_flots = {}
-    town_to_flots = {}
+    base_to_flots, town_to_flots = {}, {}
     if not dfb.empty:
         for _, r in dfb.iterrows():
             base = str(r.get("base_district") or r.get("base") or "").strip()
@@ -141,7 +150,7 @@ def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[str]]:
     if not os.path.exists(VOTES_CSV):
         raise FileNotFoundError(f"Missing votes CSV: {VOTES_CSV}")
     df = pd.read_csv(VOTES_CSV)
-    # flexible column names
+
     name_col  = next(c for c in df.columns if c.lower() in ("name","rep","representative"))
     dist_col  = next(c for c in df.columns if "district" in c.lower())
     party_col = next(c for c in df.columns if "party" in c.lower())
