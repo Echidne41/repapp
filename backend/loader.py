@@ -139,7 +139,8 @@ def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     if not dfb.empty:
         for _, r in dfb.iterrows():
             base = str(r.get("base_district") or r.get("base") or "").strip()
-            flot = str(r.get("floterial_district") or (r.get("floterial") or r.get("flot") or "").strip()
+            # NOTE: check floterial_district first, then floterial or flot
+            flot = str(r.get("floterial_district") or r.get("floterial") or r.get("flot") or "").strip()
             if not base or not flot:
                 continue
             for k in district_key_variants(base):
@@ -148,11 +149,13 @@ def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     if not dft.empty:
         for _, r in dft.iterrows():
             town = str(r.get("town") or "").strip().upper()
-            flot = str(r.get("floterial") or r.get("flot") or "").strip()
+            # again, floterial_district is the correct column
+            flot = str(r.get("floterial_district") or r.get("floterial") or r.get("flot") or "").strip()
             if town and flot:
                 town_to_flots.setdefault(town, []).append(flot)
 
     return base_to_flots, town_to_flots
+
 
 def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[str]]:
     if not os.path.exists(VOTES_CSV):
