@@ -113,49 +113,51 @@ def health():
 
 @app.route("/lookup")
 def lookup():
-    # Allow direct lat/lon (for tests) or one-line address
-    raw_addr = (request.args.get("address") or "").strip()
+    addr = request.args.get("address", "").strip()
     lat = request.args.get("lat")
     lon = request.args.get("lon")
+    town_upper = request.args.get("town", "")
 
-    if lat and lon:
-        try:
-            lat = float(lat); lon = float(lon)
-        except Exception:
-            lat = lon = None
+    # ...your geocode step (or keep lat/lon handling)...
 
-    if not (lat and lon):
-        addr = _sanitize_address(raw_addr)
-        lat, lon = _geocode_census(addr)
-        if lat is None or lon is None:
-            return jsonify({"error": "could not geocode"}), 422
+    # base found from point-in-polygon (likely 'GR15'):
+    base_code = _base_from_point(float(lat), float(lon)) if lat and lon else None
+    base_name = code_to_district_name(base_code)  # 'Grafton 15'
 
-    base_name = _base_from_point(lat, lon)
-
-    # Collect reps from base + (optional) mapped floterials
     rep_ids = []
-    if base_name:
-        for key in district_key_variants(base_name):
-            rep_ids.extend(REPS_BY_DIST.get(key, []))
-        for f in BASE_TO_FLOTS.get(base_name, []):
-            for key in district_key_variants(f):
-                rep_ids.extend(REPS_BY_DIST.get(key, []))
+    # try human-readable name first (matches your CSV), then the raw code
+    for key in (district_key_variants(base_name) if base_name else []):
+        rep_ids.extend(REPS_BY_DIST.get(key, []))
+    for key in (district_key_variants(base_code) if base_code else []):
+        rep_ids.extend(REPS_BY_DIST.get(key, []))
 
-    # de-dup, keep order
-    seen = set(); ordered = []
+    # add floterials mapped by either key (in case your CSV uses names)
+    flots = set()
+    if base_name:
+        flots.update(BASE_TO_FLOTS.get(base_name, []))
+    if base_code:
+        flots.update(BASE_TO_FLOTS.get(base_code, []))
+    for f in sorted(list(flots)):
+        for key in district_key_variants(f):
+            rep_ids.extend(REPS_BY_DIST.get(key, []))
+
+    # de-dup keep order
+    seen, ordered = set(), []
     for r in rep_ids:
         if r not in seen:
             ordered.append(r); seen.add(r)
     reps = [REP_INFO[r] for r in ordered]
 
     return jsonify({
-        "query": {"address": raw_addr, "lat": lat, "lon": lon},
-        "base_district": base_name,
-        "floterials": BASE_TO_FLOTS.get(base_name, []),
+        "query": {"address": addr, "lat": lat, "lon": lon, "town": town_upper},
+        "base_code": base_code,
+        "base_district": base_name,    # human readable for the UI
+        "floterials": sorted(list(flots)),
         "issues": ISSUES,
-        "vote_columns": [i["slug"] for i in ISSUES],  # back-compat for old UI
+        "vote_columns": [i["slug"] for i in ISSUES],
         "reps": reps
     })
+
 
 # ---- Serve the simple web UI from /web ----
 @app.route("/")
