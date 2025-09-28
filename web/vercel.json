@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "rewrites": [
     { "source": "/lookup", "destination": "https://repapp-9lq6.onrender.com/lookup" },
     { "source": "/health", "destination": "https://repapp-9lq6.onrender.com/health" }
