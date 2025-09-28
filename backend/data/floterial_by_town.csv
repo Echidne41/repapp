@@ -1,4 +1,4 @@
-town,county,floterial_district
+town,county,floterial
 Acworth,Sullivan,Sullivan 8
 Alexandria,Grafton,Grafton 18
 Allenstown,Merrimack,Merrimack 27
@@ -59,7 +59,7 @@ Hebron,Grafton,Grafton 18
 Hill,Merrimack,Merrimack 26
 Hinsdale,Cheshire,Cheshire 15
 Hollis,Hillsborough,Hillsborough 45
-Hooksett,Merrimack,Merrimack27
+Hooksett,Merrimack,Merrimack 27
 Hudson,Hillsborough,Hillsborough 38
 Jaffrey,Cheshire,Cheshire 18
 Jefferson,Coos,Coos 7
