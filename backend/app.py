@@ -20,20 +20,17 @@ if CORS:
     CORS(app)
 
 # ---- County code maps ----
-# 2-letter -> full county name (matches polygon codes like GR15)
 COUNTY_ABBR_2 = {
     "BE": "Belknap", "CA": "Carroll", "CH": "Cheshire", "CO": "Coos",
     "GR": "Grafton", "HI": "Hillsborough", "ME": "Merrimack",
     "RO": "Rockingham", "ST": "Strafford", "SU": "Sullivan",
 }
-# 2-letter -> 3-letter (matches your CSV like ROC 30, HIL 12)
 COUNTY_2_TO_3 = {
     "BE": "BEL", "CA": "CAR", "CH": "CHE", "CO": "COO",
     "GR": "GRA", "HI": "HIL", "ME": "MER",
     "RO": "ROC", "ST": "STR", "SU": "SUL",
 }
-# full county name -> 3-letter
-COUNTY_NAME_TO_3 = {v: k3 for (k2, v) in COUNTY_ABBR_2.items() for k3 in [COUNTY_2_TO_3[k2]]}
+COUNTY_NAME_TO_3 = {v: COUNTY_2_TO_3[k2] for k2, v in COUNTY_ABBR_2.items()}
 
 def code_to_district_name(s: str) -> str:
     """GR15 -> Grafton 15; also 'Grafton-15' -> 'Grafton 15'."""
@@ -109,154 +106,4 @@ def _base_from_point(lat: float, lon: float):
     return None
 
 def _three_letter_from_name_or_code(base_name: str, base_code: str) -> str | None:
-    """Return CSV-style code like 'GRA 15' if possible."""
-    # from two-letter code (e.g., GR15)
-    m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", base_code or "")
-    if m and m.group(1) in COUNTY_2_TO_3:
-        return f"{COUNTY_2_TO_3[m.group(1)]} {int(m.group(2))}"
-    # from name (e.g., 'Grafton 15')
-    m2 = re.fullmatch(r"([A-Za-z]+)\s+(\d+)", base_name or "")
-    if m2:
-        k3 = COUNTY_NAME_TO_3.get(m2.group(1))
-        if k3:
-            return f"{k3} {int(m2.group(2))}"
-    return None
-
-@app.route("/health")
-def health():
-    return jsonify({
-        "ok": True,
-        "counts": {
-            "polygons": len(DIST_SHAPES),
-            "base_to_flots": len(BASE_TO_FLOTS),
-            "town_to_flots": len(TOWN_TO_FLOTS),
-            "reps": len(REP_INFO),
-            "issues": len(ISSUES),
-        }
-    })
-
-@app.route("/lookup")
-def lookup():
-    raw_addr = (request.args.get("address") or "").strip()
-    lat_s = request.args.get("lat"); lon_s = request.args.get("lon")
-    want_debug = (request.args.get("debug") == "1")
-
-    # Parse direct lat/lon if provided
-    latf = lonf = None
-    if lat_s and lon_s:
-        try:
-            latf, lonf = float(lat_s), float(lon_s)
-        except Exception:
-            latf = lonf = None
-
-    # Geocode if needed (with NH fallback)
-    town_upper = ""
-    if latf is None or lonf is None:
-        addr = _sanitize_address(raw_addr)
-        latf, lonf, town_upper = _geocode_census(addr)
-        if (latf is None or lonf is None) and " NH" not in addr.upper():
-            latf, lonf, town_upper = _geocode_census(addr + ", NH")
-        if latf is None or lonf is None:
-            return jsonify({"error": "could not geocode"}), 422
-
-    # Base district from polygons (may be a code like GR15)
-    base_code = _base_from_point(latf, lonf)
-    base_name = code_to_district_name(base_code)
-
-    # Build aggressive key variants to match CSV/lookup differences
-    def _variants(*vals):
-        keys = set()
-        for s in vals:
-            if not s:
-                continue
-            s = str(s).strip()
-            # originals + simple variants from loader
-            for k in district_key_variants(s):
-                keys.add(k)
-            # add hyphen/space toggles
-            if " " in s:
-                for k in district_key_variants(s.replace(" ", "-")):
-                    keys.add(k)
-            if "-" in s:
-                for k in district_key_variants(s.replace("-", " ")):
-                    keys.add(k)
-        # add no-space, no-hyphen uppercase
-        more = set()
-        for k in keys:
-            more.add(re.sub(r"[\s-]+", "", k.upper()))
-        keys |= more
-        return list(keys)
-
-    # 3-letter CSV-style code (e.g., GRA 15)
-    def _three_letter_from_name_or_code(base_name: str, base_code: str):
-        m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", base_code or "")
-        if m and m.group(1) in COUNTY_2_TO_3:
-            return f"{COUNTY_2_TO_3[m.group(1)]} {int(m.group(2))}"
-        m2 = re.fullmatch(r"([A-Za-z]+)\s+(\d+)", base_name or "")
-        if m2:
-            k3 = COUNTY_NAME_TO_3.get(m2.group(1))
-            if k3:
-                return f"{k3} {int(m2.group(2))}"
-        return None
-
-    csv_code3 = _three_letter_from_name_or_code(base_name, base_code)
-
-    base_keys = _variants(base_name, base_code, csv_code3)
-    # Collect reps from base
-    rep_ids = []
-    for key in base_keys:
-        rep_ids.extend(REPS_BY_DIST.get(key, []))
-
-    # Collect floterials mapped by base name/code/3-letter and by town
-    flots = set()
-    for s in [base_name, base_code, csv_code3]:
-        if s:
-            flots.update(BASE_TO_FLOTS.get(s, []))
-            # also try normalized keys for that base in the floterial map
-            for key in _variants(s):
-                flots.update(BASE_TO_FLOTS.get(key, []))
-    if town_upper:
-        flots.update(TOWN_TO_FLOTS.get(town_upper, []))
-
-    # Add reps from floterials (try all variants of each floterial label)
-    for f in sorted(list(flots)):
-        for key in _variants(f):
-            rep_ids.extend(REPS_BY_DIST.get(key, []))
-
-    # De-dup, keep order
-    seen, ordered = set(), []
-    for r in rep_ids:
-        if r not in seen:
-            ordered.append(r); seen.add(r)
-    reps = [REP_INFO[r] for r in ordered]
-
-    resp = {
-        "query": {"address": raw_addr, "lat": latf, "lon": lonf, "town": town_upper},
-        "base_code": base_code,
-        "base_district": base_name,
-        "floterials": sorted(list(flots)),
-        "issues": ISSUES,
-        "vote_columns": [i["slug"] for i in ISSUES],
-        "reps": reps
-    }
-    if want_debug:
-        resp["debug"] = {
-            "base_keys_tried": base_keys,
-            "flots_from_base_or_code": sorted(list(flots)),
-            "re_keys_sample": list(REPS_BY_DIST.keys())[:5]  # tiny peek
-        }
-    return jsonify(resp)
-
-
-# ---- Serve the simple web UI from /web ----
-@app.route("/")
-def root():
-    return send_from_directory(os.path.join(os.path.dirname(__file__), "..", "web"), "index.html")
-
-@app.route("/<path:path>")
-def static_proxy(path):
-    web_dir = os.path.join(os.path.dirname(__file__), "..", "web")
-    return send_from_directory(web_dir, path)
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+    """
