@@ -1,3 +1,4 @@
+
 <!doctype html>
 <html lang="en">
 <head>
@@ -18,72 +19,129 @@
 
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
 
+    <!-- Multi-select filters -->
     <div class="mt-4">
-      <label class="text-sm font-medium">Filter issues:</label>
-      <select id="issueFilter" class="mt-1 border rounded-lg px-3 py-2">
-        <option value="ALL">All</option>
-      </select>
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium">Show issues:</label>
+        <div class="flex gap-2">
+          <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
+          <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
+        </div>
+      </div>
+      <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
     </div>
 
     <div id="results" class="mt-4 grid gap-4"></div>
   </div>
 
   <script>
+    // If hosted on Vercel, talk to the Render backend; otherwise same-origin.
+    const API = location.hostname.endsWith('vercel.app')
+      ? 'https://repapp-9lq6.onrender.com'
+      : '';
+
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
-    const issueFilterEl = document.getElementById("issueFilter");
+    const listEl = document.getElementById("issueChecklist");
+    const selectAllBtn = document.getElementById("selectAllBtn");
+    const clearBtn = document.getElementById("clearBtn");
 
     let LAST_ISSUES = [];
+    let LAST_REPS = [];
+    // Selected issue slugs. Special token "ALL" means show everything.
+    let SELECTED = new Set(["ALL"]);
 
-    goEl.addEventListener("click", async () => {
+    goEl.addEventListener("click", lookup);
+    addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
+    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+
+    async function lookup() {
       const a = (addrEl.value || "").trim();
       if (!a) { addrEl.focus(); return; }
       resultsEl.innerHTML = "";
       statusEl.textContent = "Looking up…";
       try {
-        const r = await fetch(`/lookup?address=${encodeURIComponent(a)}`);
+        const r = await fetch(`${API}/lookup?address=${encodeURIComponent(a)}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
 
         LAST_ISSUES = data.issues || [];
-        fillIssueFilter(LAST_ISSUES);
+        LAST_REPS = data.reps || [];
+
+        // If this is the first load, default to ALL. Otherwise keep user selections.
+        if (SELECTED.size === 0) SELECTED = new Set(["ALL"]);
+        renderChecklist(LAST_ISSUES);
 
         statusEl.textContent =
-          `Base: ${data.base_district || "?"}` +
+          `Base: ${data.base_district || data.base_code || "?"}` +
           (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
 
-        renderReps(data.reps || [], LAST_ISSUES, issueFilterEl.value);
+        renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch (e) {
-        statusEl.textContent = "Error looking up address.";
-      }
-    });
-
-    issueFilterEl.addEventListener("change", () => {
-      // re-render with the chosen issue
-      const cards = JSON.parse(resultsEl.dataset._reps || "[]");
-      renderReps(cards, LAST_ISSUES, issueFilterEl.value);
-    });
-
-    function fillIssueFilter(issues) {
-      issueFilterEl.innerHTML = `<option value="ALL">All</option>`;
-      for (const it of issues) {
-        const opt = document.createElement("option");
-        opt.value = it.slug;
-        opt.textContent = it.label || it.slug;
-        issueFilterEl.appendChild(opt);
+        statusEl.textContent = "Error contacting server.";
       }
     }
 
-    function renderReps(reps, issues, filterSlug = "ALL") {
-      resultsEl.dataset._reps = JSON.stringify(reps);
+    function renderChecklist(issues) {
+      // Build "All" first
+      const items = [{ slug: "ALL", label: "All" }, ...issues];
+      listEl.innerHTML = "";
+      items.forEach((it, idx) => {
+        const id = `iss_${idx}_${it.slug}`;
+        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
+        const row = document.createElement("label");
+        row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
+        row.htmlFor = id;
+        row.innerHTML = `
+          <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
+          <span class="text-sm">${it.label || it.slug}</span>
+        `;
+        const cb = row.querySelector("input");
+        cb.addEventListener("change", () => {
+          if (it.slug === "ALL") {
+            // Toggling ALL overrides everything else
+            if (cb.checked) {
+              SELECTED = new Set(["ALL"]);
+            } else {
+              SELECTED = new Set(); // none selected
+            }
+          } else {
+            // Selecting any specific issue clears ALL
+            if (cb.checked) {
+              SELECTED.delete("ALL");
+              SELECTED.add(it.slug);
+            } else {
+              SELECTED.delete(it.slug);
+              if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
+            }
+          }
+          renderChecklist(issues);       // refresh checked states
+          renderReps(LAST_REPS, issues, SELECTED);
+        });
+        listEl.appendChild(row);
+      });
+    }
+
+    function renderReps(reps, issues, selectedSet) {
       resultsEl.innerHTML = "";
       if (!reps.length) {
         resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
         return;
       }
+
+      // Build a quick lookup for issue metadata
+      const issueBySlug = {};
+      issues.forEach(i => issueBySlug[i.slug] = i);
+
+      // Decide which slugs to show
+      const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
+      const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
+
       for (const rep of reps) {
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
@@ -100,13 +158,21 @@
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
 
-        for (const issue of issues) {
-          if (filterSlug !== "ALL" && issue.slug !== filterSlug) continue;
-
-          const v = (rep.votes && rep.votes[issue.slug]) || { stance: "no_vote" };
+        for (const slug of shownSlugs) {
+          const issue = issueBySlug[slug];
+          if (!issue) continue;
+          const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
           const stance = v.stance;
-          const dot = stance === "support" ? "bg-green-500" :
-                      stance === "oppose"  ? "bg-red-500"   : "bg-yellow-400";
+          const dot = stance === "support" ? "bg-green-500"
+                    : stance === "oppose"  ? "bg-red-500"
+                    : "bg-yellow-400";
+
+          const hasLink = (issue.bill_url || "").trim().length > 0;
+          const billHtml = issue.bill
+            ? (hasLink
+                ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
+                : `<span class="text-xs text-slate-600">${issue.bill}</span>`)
+            : "";
 
           const row = document.createElement("div");
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
@@ -114,8 +180,8 @@
             <div class="flex items-center gap-2">
               <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
-                <span class="text-sm font-medium">${issue.label}</span>
-                ${issue.bill ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url || "#"}" target="_blank" rel="noopener">${issue.bill}</a>` : ""}
+                <span class="text-sm font-medium">${issue.label || slug}</span>
+                ${billHtml}
               </div>
             </div>
             <div class="text-xs text-slate-500">${STANCE_LABELS[stance]}</div>`;
