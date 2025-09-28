@@ -2,42 +2,40 @@
 import os, re
 from flask import Flask, jsonify, request, send_from_directory
 try:
-    from flask_cors import CORS  # optional, helps if your frontend is on Vercel
+    from flask_cors import CORS  # optional
 except Exception:
     CORS = None
 
 import requests
 from shapely.geometry import shape, Point
 
-from loader import (
-    load_geoindex, load_floterials, load_votes, district_key_variants
-)
+# Import loader (works whether backend is a package or not)
+try:
+    from .loader import load_geoindex, load_floterials, load_votes, district_key_variants
+except Exception:
+    from loader import load_geoindex, load_floterials, load_votes, district_key_variants
 
 app = Flask(__name__, static_folder=None)
 if CORS:
     CORS(app)
 
-# Map 2-letter county codes used in BaseHse22 to full county names
+# ---- County code → name (e.g., GR15 -> Grafton 15) ----
 COUNTY_ABBR = {
     "BE": "Belknap", "CA": "Carroll", "CH": "Cheshire", "CO": "Coos",
     "GR": "Grafton", "HI": "Hillsborough", "ME": "Merrimack",
     "RO": "Rockingham", "ST": "Strafford", "SU": "Sullivan",
 }
-
 def code_to_district_name(s: str) -> str:
-    """GR15 -> Grafton 15; also 'Grafton-15' -> 'Grafton 15'."""
     if not s: return s
     s = str(s).strip()
     m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", s)
     if m:
-        county = COUNTY_ABBR.get(m.group(1), m.group(1))
-        return f"{county} {int(m.group(2))}"
+        return f"{COUNTY_ABBR.get(m.group(1), m.group(1))} {int(m.group(2))}"
     if "-" in s:
         left, right = s.split("-", 1)
         if right.strip().isdigit():
             return f"{left.strip()} {int(right.strip())}"
     return s
-
 
 # ---- Load data (CSV + GeoJSON) ----
 GEO = load_geoindex()                          # reads backend/data/nh_house_districts.json
@@ -45,11 +43,10 @@ BASE_TO_FLOTS, TOWN_TO_FLOTS = load_floterials()
 REPS_BY_DIST, REP_INFO, ISSUES = load_votes()
 
 # ---- Build polygon list for point-in-polygon (base districts) ----
-DIST_SHAPES = []  # list of (shapely_geom, district_string)
+DIST_SHAPES = []  # list[(shapely_geom, district_string)]
 for feat in getattr(GEO, "items", []) or []:
     props = feat.get("properties") or {}
     geom = feat.get("geometry")
-    # Try multiple property names seen in NH layers/exports
     district_name = (
         props.get("district") or props.get("DISTRICT") or
         props.get("Dist_Name") or props.get("DIST_NAME") or
@@ -64,12 +61,11 @@ for feat in getattr(GEO, "items", []) or []:
 
 def _sanitize_address(a: str) -> str:
     if not a: return a
-    # strip unit/apt/suite/# parts that confuse geocoders
     return re.sub(r",?\s*(apt|apartment|unit|ste|suite|#)\s*[^\s,]+", "", a, flags=re.I)
 
 def _geocode_census(one_line: str):
-    """Return (lat, lon) using Census Geocoder, or (None, None) on failure."""
-    if not one_line: return None, None
+    """Return (lat, lon, town_upper) or (None, None, '')."""
+    if not one_line: return None, None, ""
     url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
     params = {"address": one_line, "benchmark": "Public_AR_Current", "format": "json"}
     try:
@@ -77,16 +73,19 @@ def _geocode_census(one_line: str):
         r.raise_for_status()
         data = r.json()
         matches = (data.get("result") or {}).get("addressMatches") or []
-        if not matches:
-            return None, None
-        coords = matches[0].get("coordinates") or {}
+        if not matches: return None, None, ""
+        m0 = matches[0]
+        coords = m0.get("coordinates") or {}
         lon = coords.get("x"); lat = coords.get("y")
-        return (lat, lon) if (lat is not None and lon is not None) else (None, None)
+        comps = m0.get("addressComponents") or {}
+        town = (comps.get("city") or comps.get("place") or comps.get("county") or "").upper().strip()
+        if lat is None or lon is None: return None, None, ""
+        return float(lat), float(lon), town
     except Exception:
-        return None, None
+        return None, None, ""
 
 def _base_from_point(lat: float, lon: float):
-    """Point-in-polygon on base districts; accept points on boundaries."""
+    """Point-in-polygon on base districts; accept boundary touches."""
     if not DIST_SHAPES:
         return None
     p = Point(lon, lat)
@@ -113,35 +112,55 @@ def health():
 
 @app.route("/lookup")
 def lookup():
-    addr = request.args.get("address", "").strip()
-    lat = request.args.get("lat")
-    lon = request.args.get("lon")
-    town_upper = request.args.get("town", "")
+    raw_addr = (request.args.get("address") or "").strip()
+    lat_s = request.args.get("lat"); lon_s = request.args.get("lon")
 
-    # ...your geocode step (or keep lat/lon handling)...
+    # Parse direct lat/lon if provided
+    latf = lonf = None
+    if lat_s and lon_s:
+        try:
+            latf, lonf = float(lat_s), float(lon_s)
+        except Exception:
+            latf = lonf = None
 
-    # base found from point-in-polygon (likely 'GR15'):
-    base_code = _base_from_point(float(lat), float(lon)) if lat and lon else None
-    base_name = code_to_district_name(base_code)  # 'Grafton 15'
+    # Geocode if needed
+    town_upper = ""
+    if latf is None or lonf is None:
+        addr = _sanitize_address(raw_addr)
+        latf, lonf, town_upper = _geocode_census(addr)
+        if latf is None or lonf is None:
+            # NH fallback (helps when user omits state)
+            if " NH" not in addr.upper():
+                latf, lonf, town_upper = _geocode_census(addr + ", NH")
+        if latf is None or lonf is None:
+            return jsonify({"error": "could not geocode"}), 422
 
+    # Base district from polygons (may be code like GR15)
+    base_code = _base_from_point(latf, lonf)
+    base_name = code_to_district_name(base_code)
+
+    # Collect reps
     rep_ids = []
-    # try human-readable name first (matches your CSV), then the raw code
+    # Prefer human-readable name (matches your CSV), then the raw code
     for key in (district_key_variants(base_name) if base_name else []):
         rep_ids.extend(REPS_BY_DIST.get(key, []))
     for key in (district_key_variants(base_code) if base_code else []):
         rep_ids.extend(REPS_BY_DIST.get(key, []))
 
-    # add floterials mapped by either key (in case your CSV uses names)
+    # Floterials mapped by base name/code and by town (if provided)
     flots = set()
     if base_name:
         flots.update(BASE_TO_FLOTS.get(base_name, []))
     if base_code:
         flots.update(BASE_TO_FLOTS.get(base_code, []))
+    if town_upper:
+        flots.update(TOWN_TO_FLOTS.get(town_upper, []))
+
     for f in sorted(list(flots)):
         for key in district_key_variants(f):
             rep_ids.extend(REPS_BY_DIST.get(key, []))
 
-    # de-dup keep order
+    # De-dup, keep order
     seen, ordered = set(), []
     for r in rep_ids:
         if r not in seen:
@@ -149,15 +168,14 @@ def lookup():
     reps = [REP_INFO[r] for r in ordered]
 
     return jsonify({
-        "query": {"address": addr, "lat": lat, "lon": lon, "town": town_upper},
+        "query": {"address": raw_addr, "lat": latf, "lon": lonf, "town": town_upper},
         "base_code": base_code,
-        "base_district": base_name,    # human readable for the UI
+        "base_district": base_name,
         "floterials": sorted(list(flots)),
         "issues": ISSUES,
-        "vote_columns": [i["slug"] for i in ISSUES],
+        "vote_columns": [i["slug"] for i in ISSUES],  # back-compat
         "reps": reps
     })
-
 
 # ---- Serve the simple web UI from /web ----
 @app.route("/")
