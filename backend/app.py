@@ -153,7 +153,7 @@ def lookup():
     if latf is None or lonf is None:
         addr = _sanitize_address(raw_addr)
         latf, lonf, town_upper = _geocode_census(addr)
-        if latf is None or lonf is None and " NH" not in addr.upper():
+        if (latf is None or lonf is None) and " NH" not in addr.upper():
             latf, lonf, town_upper = _geocode_census(addr + ", NH")
         if latf is None or lonf is None:
             return jsonify({"error": "could not geocode"}), 422
