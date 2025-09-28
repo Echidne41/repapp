@@ -17,6 +17,28 @@ app = Flask(__name__, static_folder=None)
 if CORS:
     CORS(app)
 
+# Map 2-letter county codes used in BaseHse22 to full county names
+COUNTY_ABBR = {
+    "BE": "Belknap", "CA": "Carroll", "CH": "Cheshire", "CO": "Coos",
+    "GR": "Grafton", "HI": "Hillsborough", "ME": "Merrimack",
+    "RO": "Rockingham", "ST": "Strafford", "SU": "Sullivan",
+}
+
+def code_to_district_name(s: str) -> str:
+    """GR15 -> Grafton 15; also 'Grafton-15' -> 'Grafton 15'."""
+    if not s: return s
+    s = str(s).strip()
+    m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", s)
+    if m:
+        county = COUNTY_ABBR.get(m.group(1), m.group(1))
+        return f"{county} {int(m.group(2))}"
+    if "-" in s:
+        left, right = s.split("-", 1)
+        if right.strip().isdigit():
+            return f"{left.strip()} {int(right.strip())}"
+    return s
+
+
 # ---- Load data (CSV + GeoJSON) ----
 GEO = load_geoindex()                          # reads backend/data/nh_house_districts.json
 BASE_TO_FLOTS, TOWN_TO_FLOTS = load_floterials()
