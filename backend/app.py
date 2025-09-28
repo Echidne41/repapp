@@ -19,18 +19,29 @@ app = Flask(__name__, static_folder=None)
 if CORS:
     CORS(app)
 
-# ---- County code → name (e.g., GR15 -> Grafton 15) ----
-COUNTY_ABBR = {
+# ---- County code maps ----
+# 2-letter -> full county name (matches polygon codes like GR15)
+COUNTY_ABBR_2 = {
     "BE": "Belknap", "CA": "Carroll", "CH": "Cheshire", "CO": "Coos",
     "GR": "Grafton", "HI": "Hillsborough", "ME": "Merrimack",
     "RO": "Rockingham", "ST": "Strafford", "SU": "Sullivan",
 }
+# 2-letter -> 3-letter (matches your CSV like ROC 30, HIL 12)
+COUNTY_2_TO_3 = {
+    "BE": "BEL", "CA": "CAR", "CH": "CHE", "CO": "COO",
+    "GR": "GRA", "HI": "HIL", "ME": "MER",
+    "RO": "ROC", "ST": "STR", "SU": "SUL",
+}
+# full county name -> 3-letter
+COUNTY_NAME_TO_3 = {v: k3 for (k2, v) in COUNTY_ABBR_2.items() for k3 in [COUNTY_2_TO_3[k2]]}
+
 def code_to_district_name(s: str) -> str:
+    """GR15 -> Grafton 15; also 'Grafton-15' -> 'Grafton 15'."""
     if not s: return s
     s = str(s).strip()
     m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", s)
     if m:
-        return f"{COUNTY_ABBR.get(m.group(1), m.group(1))} {int(m.group(2))}"
+        return f"{COUNTY_ABBR_2.get(m.group(1), m.group(1))} {int(m.group(2))}"
     if "-" in s:
         left, right = s.split("-", 1)
         if right.strip().isdigit():
@@ -97,6 +108,20 @@ def _base_from_point(lat: float, lon: float):
             continue
     return None
 
+def _three_letter_from_name_or_code(base_name: str, base_code: str) -> str | None:
+    """Return CSV-style code like 'GRA 15' if possible."""
+    # from two-letter code (e.g., GR15)
+    m = re.fullmatch(r"([A-Z]{2})\s*-?\s*(\d+)", base_code or "")
+    if m and m.group(1) in COUNTY_2_TO_3:
+        return f"{COUNTY_2_TO_3[m.group(1)]} {int(m.group(2))}"
+    # from name (e.g., 'Grafton 15')
+    m2 = re.fullmatch(r"([A-Za-z]+)\s+(\d+)", base_name or "")
+    if m2:
+        k3 = COUNTY_NAME_TO_3.get(m2.group(1))
+        if k3:
+            return f"{k3} {int(m2.group(2))}"
+    return None
+
 @app.route("/health")
 def health():
     return jsonify({
@@ -123,39 +148,41 @@ def lookup():
         except Exception:
             latf = lonf = None
 
-    # Geocode if needed
+    # Geocode if needed (try with NH fallback)
     town_upper = ""
     if latf is None or lonf is None:
         addr = _sanitize_address(raw_addr)
         latf, lonf, town_upper = _geocode_census(addr)
-        if latf is None or lonf is None:
-            # NH fallback (helps when user omits state)
-            if " NH" not in addr.upper():
-                latf, lonf, town_upper = _geocode_census(addr + ", NH")
+        if latf is None or lonf is None and " NH" not in addr.upper():
+            latf, lonf, town_upper = _geocode_census(addr + ", NH")
         if latf is None or lonf is None:
             return jsonify({"error": "could not geocode"}), 422
 
-    # Base district from polygons (may be code like GR15)
+    # Base district from polygons (may be like GR15)
     base_code = _base_from_point(latf, lonf)
     base_name = code_to_district_name(base_code)
+    csv_code3 = _three_letter_from_name_or_code(base_name, base_code)  # e.g., 'GRA 15'
 
-    # Collect reps
+    # Build all candidate keys to match your CSV indexing
+    candidate_keys = []
+    for s in [base_name, base_code, csv_code3]:
+        if s:
+            candidate_keys.extend(district_key_variants(s))
+    # also include no-space version of csv_code3 (e.g., 'GRA15')
+    if csv_code3:
+        candidate_keys.append(csv_code3.replace(" ", ""))
+
+    # Collect reps from base + floterials (by name/code/CSV code)
     rep_ids = []
-    # Prefer human-readable name (matches your CSV), then the raw code
-    for key in (district_key_variants(base_name) if base_name else []):
-        rep_ids.extend(REPS_BY_DIST.get(key, []))
-    for key in (district_key_variants(base_code) if base_code else []):
+    for key in candidate_keys:
         rep_ids.extend(REPS_BY_DIST.get(key, []))
 
-    # Floterials mapped by base name/code and by town (if provided)
     flots = set()
-    if base_name:
-        flots.update(BASE_TO_FLOTS.get(base_name, []))
-    if base_code:
-        flots.update(BASE_TO_FLOTS.get(base_code, []))
+    for s in [base_name, base_code, csv_code3]:
+        if s:
+            flots.update(BASE_TO_FLOTS.get(s, []))
     if town_upper:
         flots.update(TOWN_TO_FLOTS.get(town_upper, []))
-
     for f in sorted(list(flots)):
         for key in district_key_variants(f):
             rep_ids.extend(REPS_BY_DIST.get(key, []))
