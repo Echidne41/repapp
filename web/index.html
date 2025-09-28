@@ -3,87 +3,128 @@
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
-  <title>NH Rep Finder (Key Votes)</title>
+  <title>NH Rep Finder</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-50 text-slate-900">
-  <div class="max-w-md mx-auto p-4 space-y-4">
-    <header class="pt-6">
-      <h1 class="text-2xl font-semibold">NH Rep Finder</h1>
-      <p class="text-sm text-slate-600">Enter your NH address to see your state reps and their key votes.</p>
-    </header>
+<body class="bg-slate-50">
+  <div class="max-w-xl mx-auto p-4">
+    <h1 class="text-2xl font-semibold">NH Rep Finder</h1>
+    <p class="text-sm text-slate-600">Enter your NH address to see your House reps and where they stood on key votes.</p>
 
-    <form id="form" class="flex gap-2">
-      <input id="addr" type="text" placeholder="123 Main St, Town"
-             class="flex-1 px-3 py-2 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-             required />
-      <button class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Go</button>
-    </form>
+    <div class="mt-4 flex gap-2">
+      <input id="addr" class="flex-1 border rounded-lg px-3 py-2" placeholder="123 Main St, Town, NH"/>
+      <button id="go" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
+    </div>
 
-    <div id="status" class="text-sm text-slate-600"></div>
+    <div id="status" class="mt-3 text-sm text-slate-700"></div>
 
-    <section id="result" class="space-y-3"></section>
+    <div class="mt-4">
+      <label class="text-sm font-medium">Filter issues:</label>
+      <select id="issueFilter" class="mt-1 border rounded-lg px-3 py-2">
+        <option value="ALL">All</option>
+      </select>
+    </div>
+
+    <div id="results" class="mt-4 grid gap-4"></div>
   </div>
 
   <script>
-    const form = document.getElementById('form');
-    const addr = document.getElementById('addr');
-    const statusEl = document.getElementById('status');
-    const resultEl = document.getElementById('result');
+    const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      resultEl.innerHTML = '';
-      statusEl.textContent = 'Looking up…';
+    const addrEl = document.getElementById("addr");
+    const goEl = document.getElementById("go");
+    const statusEl = document.getElementById("status");
+    const resultsEl = document.getElementById("results");
+    const issueFilterEl = document.getElementById("issueFilter");
+
+    let LAST_ISSUES = [];
+
+    goEl.addEventListener("click", async () => {
+      const a = (addrEl.value || "").trim();
+      if (!a) { addrEl.focus(); return; }
+      resultsEl.innerHTML = "";
+      statusEl.textContent = "Looking up…";
       try {
-        const q = new URLSearchParams({ address: addr.value });
-        const r = await fetch(`/lookup?${q.toString()}`);
+        const r = await fetch(`/lookup?address=${encodeURIComponent(a)}`);
         const data = await r.json();
-        if (!r.ok) {
-          statusEl.textContent = data.error || 'Lookup failed.';
-          return;
-        }
-        statusEl.textContent = `Base district: ${data.base_district}` + (data.floterials.length ? ` · Floterials: ${data.floterials.join(', ')}` : '');
-        renderReps(data.reps, data.vote_columns);
-      } catch (err) {
-        statusEl.textContent = 'Error contacting server.';
+
+        LAST_ISSUES = data.issues || [];
+        fillIssueFilter(LAST_ISSUES);
+
+        statusEl.textContent =
+          `Base: ${data.base_district || "?"}` +
+          (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
+
+        renderReps(data.reps || [], LAST_ISSUES, issueFilterEl.value);
+      } catch (e) {
+        statusEl.textContent = "Error looking up address.";
       }
     });
 
-    function renderReps(reps, voteCols) {
-      if (!reps || !reps.length) {
-        resultEl.innerHTML = '<p class="text-sm text-slate-600">No reps found.</p>';
+    issueFilterEl.addEventListener("change", () => {
+      // re-render with the chosen issue
+      const cards = JSON.parse(resultsEl.dataset._reps || "[]");
+      renderReps(cards, LAST_ISSUES, issueFilterEl.value);
+    });
+
+    function fillIssueFilter(issues) {
+      issueFilterEl.innerHTML = `<option value="ALL">All</option>`;
+      for (const it of issues) {
+        const opt = document.createElement("option");
+        opt.value = it.slug;
+        opt.textContent = it.label || it.slug;
+        issueFilterEl.appendChild(opt);
+      }
+    }
+
+    function renderReps(reps, issues, filterSlug = "ALL") {
+      resultsEl.dataset._reps = JSON.stringify(reps);
+      resultsEl.innerHTML = "";
+      if (!reps.length) {
+        resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
         return;
       }
-      reps.forEach(rep => {
-        const card = document.createElement('div');
-        card.className = 'rounded-xl border bg-white p-4 shadow-sm';
+      for (const rep of reps) {
+        const card = document.createElement("div");
+        card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
-        const header = document.createElement('div');
-        header.className = 'flex items-center justify-between';
-        header.innerHTML = `<div>
-            <div class="font-medium">${rep.name}</div>
-            <div class="text-xs text-slate-500">${rep.party} · ${rep.district}</div>
+        const header = document.createElement("div");
+        header.className = "flex items-baseline justify-between";
+        header.innerHTML = `
+          <div>
+            <div class="text-lg font-semibold">${rep.name}</div>
+            <div class="text-sm text-slate-600">${rep.party} · ${rep.district}</div>
           </div>`;
         card.appendChild(header);
 
-        // votes grid
-        const grid = document.createElement('div');
-        grid.className = 'mt-3 grid grid-cols-1 gap-2';
-        voteCols.forEach(v => {
-          const val = (rep.votes?.[v] || '').trim();
-          const badge = document.createElement('div');
-          const klass = val.toUpperCase() === 'Y' || val.toUpperCase() === 'YES' ? 'bg-green-100 text-green-700'
-                      : val.toUpperCase() === 'N' || val.toUpperCase() === 'NO'  ? 'bg-red-100 text-red-700'
-                      : 'bg-slate-100 text-slate-700';
-          badge.className = `flex items-center justify-between rounded-lg px-3 py-2 ${klass}`;
-          badge.innerHTML = `<span class="text-sm font-medium">${v}</span><span class="text-sm">${val || '—'}</span>`;
-          grid.appendChild(badge);
-        });
-        card.appendChild(grid);
+        const grid = document.createElement("div");
+        grid.className = "mt-3 grid grid-cols-1 gap-2";
 
-        resultEl.appendChild(card);
-      });
+        for (const issue of issues) {
+          if (filterSlug !== "ALL" && issue.slug !== filterSlug) continue;
+
+          const v = (rep.votes && rep.votes[issue.slug]) || { stance: "no_vote" };
+          const stance = v.stance;
+          const dot = stance === "support" ? "bg-green-500" :
+                      stance === "oppose"  ? "bg-red-500"   : "bg-yellow-400";
+
+          const row = document.createElement("div");
+          row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
+          row.innerHTML = `
+            <div class="flex items-center gap-2">
+              <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
+              <div class="flex flex-col">
+                <span class="text-sm font-medium">${issue.label}</span>
+                ${issue.bill ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url || "#"}" target="_blank" rel="noopener">${issue.bill}</a>` : ""}
+              </div>
+            </div>
+            <div class="text-xs text-slate-500">${STANCE_LABELS[stance]}</div>`;
+          grid.appendChild(row);
+        }
+
+        card.appendChild(grid);
+        resultsEl.appendChild(card);
+      }
     }
   </script>
 </body>
