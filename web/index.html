@@ -12,17 +12,17 @@
     <p class="text-sm text-slate-600">Enter your NH address to see your House reps and where they stood on key votes.</p>
 
     <!-- Accordion: issues selector (visible before lookup) -->
-    <details id="issuesAccordion" class="mt-4 rounded-lg border bg-white">
+    <details id="issuesAccordion" class="mt-4 rounded-lg border bg-white" open>
       <summary class="px-3 py-2 cursor-pointer select-none flex items-center justify-between">
         <span class="text-sm font-medium">Choose issues (optional)</span>
         <span class="text-xs text-slate-500" id="issuesCount"></span>
       </summary>
       <div class="px-3 pb-3 pt-1">
         <div class="flex items-center justify-between">
-          <div class="text-xs text-slate-600" id="issuesHint">Pick one or more issues to focus the results.</div>
+          <div class="text-xs text-slate-600" id="issuesHint">Loading issues…</div>
           <div class="flex gap-2">
-            <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
-            <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
+            <button id="selectAllBtn" type="button" class="text-xs underline text-indigo-700">Select all</button>
+            <button id="clearBtn" type="button" class="text-xs underline text-indigo-700">Clear</button>
           </div>
         </div>
         <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
@@ -32,7 +32,7 @@
     <!-- Address input -->
     <div class="mt-4 flex gap-2">
       <input id="addr" class="flex-1 border rounded-lg px-3 py-2" placeholder="123 Main St, Town, NH"/>
-      <button id="go" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
+      <button id="go" type="button" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
     </div>
 
     <!-- Top status line: Districts: ... -->
@@ -43,7 +43,7 @@
   </div>
 
   <script>
-    // Same-origin; on Vercel your rewrites map /lookup and /issues to backend.
+    // Same-origin; Vercel rewrites /lookup, /health, /issues to your backend in web/vercel.json.
     const API = '';
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
@@ -88,17 +88,22 @@
       return `<span class="text-slate-400 text-base leading-none" aria-hidden="true">?</span>`;
     }
 
-    // District helpers
+    // ----- District display helpers -----
     const COUNTY_MAP = {
-      BE:'Belknap', BEL:'Belknap', CA:'Carroll', CAR:'Carroll',
-      CH:'Cheshire', CHS:'Cheshire', CO:'Coos', COO:'Coos', COOS:'Coos',
-      GR:'Grafton', GRA:'Grafton', HI:'Hillsborough', HIL:'Hillsborough',
+      BE:'Belknap', BEL:'Belknap',
+      CA:'Carroll', CAR:'Carroll',
+      CH:'Cheshire', CHS:'Cheshire',
+      CO:'Coos', COO:'Coos', COOS:'Coos',
+      GR:'Grafton', GRA:'Grafton',
+      HI:'Hillsborough', HIL:'Hillsborough',
       MR:'Merrimack', ME:'Merrimack', MER:'Merrimack',
-      RO:'Rockingham', ROC:'Rockingham', ST:'Strafford', STR:'Strafford',
+      RO:'Rockingham', ROC:'Rockingham',
+      ST:'Strafford', STR:'Strafford',
       SU:'Sullivan', SUL:'Sullivan'
     };
     function titleCase(s){return String(s).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());}
     function isNanLike(x){ if(x==null) return true; const s=String(x).trim(); return !s || /^nan$/i.test(s) || /<\s*nan\s*>/i.test(s);}
+    // Expand "SU7"/"SU 7"/"SUL 7"/"Sullivan 7" -> "Sullivan 7"
     function expandDistrict(raw){
       if (isNanLike(raw)) return null;
       let t = String(raw).replace(/[–—-]+/g,' ').replace(/\s+/g,' ').trim();
@@ -108,24 +113,28 @@
       return titleCase(t);
     }
     function canonicalDistrict(d){ const e=expandDistrict(d); return e?e.replace(/\s+/g,' ').toLowerCase():null; }
+    // Top "Districts: ..." line (merge base + floterials, hide NaNs)
     function statusLine(data){
       const combined = [ data.base_district || data.base_code || null, ...(Array.isArray(data.floterials)?data.floterials:[]) ]
         .filter(x => !isNanLike(x));
       const pretty = [...new Set(combined.map(expandDistrict).filter(Boolean))];
       return pretty.length ? `Districts: ${pretty.join(', ')}` : '';
     }
+    // Get a rep's district value from various shapes
     function getRepDistrict(rep){
       return rep.district ?? rep.District ?? rep.house_district ?? rep.houseDistrict ?? rep['House District'] ?? '';
     }
+    // Format district on the rep card; append (floterial) if applicable
     function makeRepDistrictFormatter(floterials){
       const flSet = new Set((floterials||[]).map(canonicalDistrict).filter(Boolean));
       return function(d){
         const pretty = expandDistrict(d);
-        if (!pretty) return '';
+        if (!pretty) return ''; // hide <NAN>/blank
         const isFl = flSet.has(canonicalDistrict(pretty));
         return isFl ? `${pretty} (floterial)` : pretty;
       }
     }
+    // ------------------------------------
 
     // State
     const addrEl = document.getElementById("addr");
@@ -138,9 +147,9 @@
     const issuesCountEl = document.getElementById("issuesCount");
     const issuesHintEl = document.getElementById("issuesHint");
 
-    let LAST_ISSUES = [];          // [{slug,label,bill,bill_url}]
+    let LAST_ISSUES = [];             // [{slug,label,bill,bill_url}]
     let LAST_REPS = [];
-    let SELECTED = new Set(["ALL"]); // "All" by default
+    let SELECTED = new Set(["ALL"]);  // "All" by default
 
     document.addEventListener("DOMContentLoaded", prefetchIssues);
     goEl.addEventListener("click", lookup);
@@ -149,7 +158,7 @@
     clearBtn.addEventListener("click",  (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); });
 
     async function prefetchIssues(){
-      // Try to load issues list (so users can pre-select before lookup).
+      // Load issues so users can pre-select before lookup.
       try{
         const r = await fetch(`${API}/issues`);
         if (!r.ok) throw new Error();
