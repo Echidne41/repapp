@@ -39,7 +39,7 @@
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
-    // FIXED: Dem=blue, GOP=red, Ind=yellow
+    // Party badges (Dem=blue, GOP=red, Ind=yellow)
     const PARTY_STYLES = {
       democrat:    { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
       democratic:  { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
@@ -59,7 +59,7 @@
       return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${conf.cls}">${conf.label}</span>`;
     }
 
-    // NEW: colored thumbs (SVG) right next to stance text
+    // Colored stance icons (SVG)
     function iconFor(stance) {
       if (stance === 'support') {
         return `
@@ -78,6 +78,80 @@
       }
       return `<span class="text-slate-400 text-base leading-none" aria-hidden="true">?</span>`;
     }
+
+    // ----- District display helpers -----
+    // Known county-code expansions (covering common 2-3 letter forms)
+    const COUNTY_MAP = {
+      BE: 'Belknap',  BEL:'Belknap',
+      CA: 'Carroll',  CAR:'Carroll',
+      CH: 'Cheshire', CHS:'Cheshire',
+      CO: 'Coos',     COO:'Coos', COOS:'Coos',
+      GR: 'Grafton',  GRA:'Grafton',
+      HI: 'Hillsborough', HIL:'Hillsborough',
+      MR: 'Merrimack', ME:'Merrimack', MER:'Merrimack',
+      RO: 'Rockingham', ROC:'Rockingham',
+      ST: 'Strafford', STR:'Strafford',
+      SU: 'Sullivan', SUL:'Sullivan'
+    };
+
+    function titleCase(s) { return String(s).toLowerCase().replace(/\b\w/g, c => c.toUpperCase()); }
+    function isNanLike(x) {
+      if (x == null) return true;
+      const s = String(x).trim();
+      return !s || /^nan$/i.test(s) || /<\s*nan\s*>/i.test(s);
+    }
+
+    // Expand things like "SU 7", "SU7", "SULLIVAN 7" → "Sullivan 7"
+    function expandDistrict(raw) {
+      if (isNanLike(raw)) return null;
+      let t = String(raw).replace(/[–—-]+/g, ' ').replace(/\s+/g, ' ').trim();
+      // Try CODE + number (with or without space)
+      let m = t.match(/^([A-Za-z]+)\s*(\d+)$/);
+      if (m) {
+        const code = m[1].toUpperCase();
+        const num = m[2];
+        const name = COUNTY_MAP[code] || titleCase(m[1]);
+        return `${name} ${num}`;
+      }
+      // Try "Name number"
+      m = t.match(/^(.+?)\s+(\d+)$/);
+      if (m) return `${titleCase(m[1])} ${m[2]}`;
+      // Otherwise, just title-case if it's not NaN-ish
+      return titleCase(t);
+    }
+
+    function canonicalDistrict(d) {
+      const e = expandDistrict(d);
+      return e ? e.replace(/\s+/g, ' ').toLowerCase() : null;
+    }
+
+    // Build "Districts: A, B, C" line (hide NaNs)
+    function statusLine(data) {
+      const combined = [
+        data.base_district || data.base_code || null,
+        ...(Array.isArray(data.floterials) ? data.floterials : [])
+      ].filter(x => !isNanLike(x));
+
+      const pretty = [...new Set(combined.map(expandDistrict).filter(Boolean))];
+      return pretty.length ? `Districts: ${pretty.join(', ')}` : '';
+    }
+
+    // Get a rep's district from possible fields
+    function getRepDistrict(rep) {
+      return rep.district ?? rep.District ?? rep.house_district ?? rep.houseDistrict ?? rep['House District'] ?? '';
+    }
+
+    // Format district on the rep card; append (floterial) if applicable
+    function makeRepDistrictFormatter(floterials) {
+      const flSet = new Set((floterials || []).map(canonicalDistrict).filter(Boolean));
+      return function formatRepDistrict(d) {
+        const pretty = expandDistrict(d);
+        if (!pretty) return ''; // hide <NAN>/blank
+        const isFl = flSet.has(canonicalDistrict(pretty));
+        return isFl ? `${pretty} (floterial)` : pretty;
+      };
+    }
+    // ------------------------------------
 
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
@@ -109,14 +183,12 @@
         LAST_ISSUES = data.issues || [];
         LAST_REPS = data.reps || [];
 
+        // Top line: just districts (no base/floterial split), hide NANs
+        statusEl.textContent = statusLine(data);
+
         if (SELECTED.size === 0) SELECTED = new Set(["ALL"]);
         renderChecklist(LAST_ISSUES);
-
-        statusEl.textContent =
-          `Base: ${data.base_district || data.base_code || "?"}` +
-          (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
-
-        renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+        renderReps(LAST_REPS, LAST_ISSUES, SELECTED, data.floterials || []);
       } catch (e) {
         statusEl.textContent = "Error contacting server.";
       }
@@ -138,8 +210,7 @@
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
           if (it.slug === "ALL") {
-            if (cb.checked) SELECTED = new Set(["ALL"]);
-            else SELECTED = new Set();
+            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
           } else {
             if (cb.checked) { SELECTED.delete("ALL"); SELECTED.add(it.slug); }
             else { SELECTED.delete(it.slug); if (SELECTED.size === 0) SELECTED.add("ALL"); }
@@ -151,12 +222,14 @@
       });
     }
 
-    function renderReps(reps, issues, selectedSet) {
+    function renderReps(reps, issues, selectedSet, floterials = []) {
       resultsEl.innerHTML = "";
       if (!reps.length) {
         resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
         return;
       }
+
+      const formatRepDistrict = makeRepDistrictFormatter(floterials);
 
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
@@ -168,6 +241,9 @@
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
+        const districtRaw = getRepDistrict(rep);
+        const districtPretty = formatRepDistrict(districtRaw);
+
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         header.innerHTML = `
@@ -175,7 +251,7 @@
             <div class="text-lg font-semibold">${rep.name}</div>
             <div class="mt-0.5 flex items-center gap-2">
               ${partyBadge(rep.party || rep.Party)}
-              <span class="text-sm text-slate-600">${rep.district}</span>
+              ${districtPretty ? `<span class="text-sm text-slate-600">${districtPretty}</span>` : ``}
             </div>
           </div>`;
         card.appendChild(header);
