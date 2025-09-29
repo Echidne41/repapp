@@ -176,6 +176,12 @@ def health():
         }
     })
 
+# NEW: list issues for the pre-select UI
+@app.route("/issues")
+def issues():
+    # Same shape as what's included in /lookup already; served standalone for the prefetching UI
+    return jsonify({"issues": ISSUES})
+
 @app.route("/lookup")
 def lookup():
     raw_addr = (request.args.get("address") or "").strip()
@@ -243,13 +249,26 @@ def lookup():
             ordered.append(r); seen.add(r)
     reps = [REP_INFO[r] for r in ordered]
 
+    # OPTIONAL: limit payload with ?issues=slug,slug
+    only_param = (request.args.get("issues") or "").strip()
+    only_slugs = {s.strip() for s in only_param.split(",") if s.strip()}
+    issues_out = ISSUES
+    if only_slugs:
+        issues_out = [i for i in ISSUES if i.get("slug") in only_slugs]
+        filtered_reps = []
+        for rep in reps:
+            votes = rep.get("votes") or {}
+            filtered_votes = {k: v for k, v in votes.items() if k in only_slugs}
+            filtered_reps.append({**rep, "votes": filtered_votes})
+        reps = filtered_reps
+
     resp = {
         "query": {"address": raw_addr, "lat": latf, "lon": lonf, "town": town_upper},
         "base_code": base_code,
         "base_district": base_name,
         "floterials": sorted(list(flots)),
-        "issues": ISSUES,
-        "vote_columns": [i["slug"] for i in ISSUES],  # back-compat
+        "issues": issues_out,
+        "vote_columns": [i["slug"] for i in issues_out],  # back-compat
         "reps": reps
     }
     if want_debug:
