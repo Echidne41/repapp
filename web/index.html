@@ -11,28 +11,36 @@
     <h1 class="text-2xl font-semibold">NH Rep Finder</h1>
     <p class="text-sm text-slate-600">Enter your NH address to see your House reps and where they stood on key votes.</p>
 
-    <!-- Accordion: issues selector (visible before lookup) -->
-    <details id="issuesAccordion" class="mt-4 rounded-lg border bg-white" open>
-      <summary class="px-3 py-2 cursor-pointer select-none flex items-center justify-between">
-        <span class="text-sm font-medium">Choose issues (optional)</span>
-        <span class="text-xs text-slate-500" id="issuesCount"></span>
-      </summary>
-      <div class="px-3 pb-3 pt-1">
-        <div class="flex items-center justify-between">
-          <div class="text-xs text-slate-600" id="issuesHint">Loading issues…</div>
+    <!-- Address FIRST -->
+    <div class="mt-4 flex gap-2">
+      <input id="addr" class="flex-1 border rounded-lg px-3 py-2" placeholder="123 Main St, Town, NH"/>
+      <button id="go" type="button" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
+    </div>
+
+    <!-- Issues dropdown SECOND -->
+    <div class="mt-3 relative inline-block">
+      <button id="issuesBtn" type="button"
+              class="inline-flex items-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm shadow-sm">
+        <span>Choose issues</span>
+        <span id="issuesCount" class="text-xs text-slate-500">All</span>
+        <svg class="w-4 h-4 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clip-rule="evenodd"/>
+        </svg>
+      </button>
+
+      <!-- Dropdown panel -->
+      <div id="issuesDropdown"
+           class="absolute left-0 z-10 mt-2 w-full sm:w-80 rounded-lg border bg-white shadow-lg p-2 hidden">
+        <div class="flex items-center justify-between px-1 pb-2">
+          <div id="issuesHint" class="text-xs text-slate-600">Loading issues…</div>
           <div class="flex gap-2">
             <button id="selectAllBtn" type="button" class="text-xs underline text-indigo-700">Select all</button>
             <button id="clearBtn" type="button" class="text-xs underline text-indigo-700">Clear</button>
           </div>
         </div>
-        <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+        <!-- Single-column, scrollable checklist -->
+        <div id="issueChecklist" class="max-h-64 overflow-y-auto flex flex-col gap-1 px-1"></div>
       </div>
-    </details>
-
-    <!-- Address input -->
-    <div class="mt-4 flex gap-2">
-      <input id="addr" class="flex-1 border rounded-lg px-3 py-2" placeholder="123 Main St, Town, NH"/>
-      <button id="go" type="button" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
     </div>
 
     <!-- Top status line: Districts: ... -->
@@ -43,7 +51,7 @@
   </div>
 
   <script>
-    // Same-origin; Vercel rewrites /lookup, /health, /issues to your backend in web/vercel.json.
+    // Same-origin; Vercel rewrites /lookup, /health, /issues to your backend.
     const API = '';
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
@@ -103,7 +111,6 @@
     };
     function titleCase(s){return String(s).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());}
     function isNanLike(x){ if(x==null) return true; const s=String(x).trim(); return !s || /^nan$/i.test(s) || /<\s*nan\s*>/i.test(s);}
-    // Expand "SU7"/"SU 7"/"SUL 7"/"Sullivan 7" -> "Sullivan 7"
     function expandDistrict(raw){
       if (isNanLike(raw)) return null;
       let t = String(raw).replace(/[–—-]+/g,' ').replace(/\s+/g,' ').trim();
@@ -113,18 +120,15 @@
       return titleCase(t);
     }
     function canonicalDistrict(d){ const e=expandDistrict(d); return e?e.replace(/\s+/g,' ').toLowerCase():null; }
-    // Top "Districts: ..." line (merge base + floterials, hide NaNs)
     function statusLine(data){
       const combined = [ data.base_district || data.base_code || null, ...(Array.isArray(data.floterials)?data.floterials:[]) ]
         .filter(x => !isNanLike(x));
       const pretty = [...new Set(combined.map(expandDistrict).filter(Boolean))];
       return pretty.length ? `Districts: ${pretty.join(', ')}` : '';
     }
-    // Get a rep's district value from various shapes
     function getRepDistrict(rep){
       return rep.district ?? rep.District ?? rep.house_district ?? rep.houseDistrict ?? rep['House District'] ?? '';
     }
-    // Format district on the rep card; append (floterial) if applicable
     function makeRepDistrictFormatter(floterials){
       const flSet = new Set((floterials||[]).map(canonicalDistrict).filter(Boolean));
       return function(d){
@@ -141,6 +145,8 @@
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
+    const ddBtn = document.getElementById("issuesBtn");
+    const ddPanel = document.getElementById("issuesDropdown");
     const listEl = document.getElementById("issueChecklist");
     const selectAllBtn = document.getElementById("selectAllBtn");
     const clearBtn = document.getElementById("clearBtn");
@@ -152,6 +158,14 @@
     let SELECTED = new Set(["ALL"]);  // "All" by default
 
     document.addEventListener("DOMContentLoaded", prefetchIssues);
+    ddBtn.addEventListener("click", (e) => { e.stopPropagation(); ddPanel.classList.toggle("hidden"); });
+    document.addEventListener("click", (e) => {
+      if (!ddPanel.classList.contains("hidden")) {
+        if (!ddPanel.contains(e.target) && e.target !== ddBtn && !ddBtn.contains(e.target)) ddPanel.classList.add("hidden");
+      }
+    });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") ddPanel.classList.add("hidden"); });
+
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
     selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); });
@@ -209,13 +223,12 @@
     }
 
     function renderChecklist(issues) {
-      const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
-      items.forEach((it, idx) => {
+      issues.forEach((it, idx) => {
         const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
+        const checked = SELECTED.has("ALL") || SELECTED.has(it.slug);
         const row = document.createElement("label");
-        row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
+        row.className = "flex items-center gap-2 rounded-md border bg-white px-3 py-2";
         row.htmlFor = id;
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
@@ -223,13 +236,14 @@
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (it.slug === "ALL") {
-            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
+          if (cb.checked) {
+            SELECTED.delete("ALL");
+            SELECTED.add(it.slug);
           } else {
-            if (cb.checked) { SELECTED.delete("ALL"); SELECTED.add(it.slug); }
-            else { SELECTED.delete(it.slug); if (SELECTED.size === 0) SELECTED.add("ALL"); }
+            SELECTED.delete(it.slug);
+            if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to All
           }
-          renderChecklist(issues);
+          updateIssuesCount();
         });
         listEl.appendChild(row);
       });
@@ -238,7 +252,7 @@
 
     function updateIssuesCount(){
       const slugs = selectedSlugs();
-      issuesCountEl.textContent = slugs.length ? `${slugs.length} selected` : 'All issues';
+      issuesCountEl.textContent = slugs.length ? `${slugs.length} selected` : 'All';
     }
 
     function renderReps(reps, issues, selectedSet, floterials = []) {
