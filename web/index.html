@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -40,7 +39,37 @@
       ? 'https://repapp-9lq6.onrender.com'
       : '';
 
+    // Stance labels (unchanged)
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
+
+    // New: map party -> colored badge (Dem=red, Rep=blue, Ind=yellow as requested)
+    const PARTY_STYLES = {
+      democrat:    { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
+      democratic:  { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
+      d:           { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
+
+      republican:  { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+      gop:         { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+      r:           { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+
+      independent: { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
+      unaffiliated:{ label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
+      i:           { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' }
+    };
+    function partyBadge(partyRaw) {
+      const key = String(partyRaw || '').trim().toLowerCase();
+      const conf = PARTY_STYLES[key] || { label: partyRaw || 'Unknown', cls: 'bg-gray-50 text-gray-700 ring-gray-200' };
+      return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${conf.cls}">${conf.label}</span>`;
+    }
+
+    // New: stance -> icon (thumbs/question)
+    function iconFor(stance) {
+      switch (stance) {
+        case 'support': return '👍';
+        case 'oppose':  return '👎';
+        default:        return '❓';
+      }
+    }
 
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
@@ -151,7 +180,10 @@
         header.innerHTML = `
           <div>
             <div class="text-lg font-semibold">${rep.name}</div>
-            <div class="text-sm text-slate-600">${rep.party} · ${rep.district}</div>
+            <div class="mt-0.5 flex items-center gap-2">
+              ${partyBadge(rep.party || rep.Party)}
+              <span class="text-sm text-slate-600">${rep.district}</span>
+            </div>
           </div>`;
         card.appendChild(header);
 
@@ -163,9 +195,6 @@
           if (!issue) continue;
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
           const stance = v.stance;
-          const dot = stance === "support" ? "bg-green-500"
-                    : stance === "oppose"  ? "bg-red-500"
-                    : "bg-yellow-400";
 
           const hasLink = (issue.bill_url || "").trim().length > 0;
           const billHtml = issue.bill
@@ -178,13 +207,15 @@
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
-              <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
                 <span class="text-sm font-medium">${issue.label || slug}</span>
                 ${billHtml}
               </div>
             </div>
-            <div class="text-xs text-slate-500">${STANCE_LABELS[stance]}</div>`;
+            <div class="flex items-center gap-1 text-xs text-slate-600" aria-label="${STANCE_LABELS[stance]}">
+              <span class="text-base" aria-hidden="true">${iconFor(stance)}</span>
+              <span>${STANCE_LABELS[stance]}</span>
+            </div>`;
           grid.appendChild(row);
         }
 
