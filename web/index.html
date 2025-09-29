@@ -34,23 +34,20 @@
   </div>
 
   <script>
-    // If hosted on Vercel, talk to the Render backend; otherwise same-origin.
-    const API = location.hostname.endsWith('vercel.app')
-      ? 'https://repapp-9lq6.onrender.com'
-      : '';
+    // Use same-origin; Vercel rewrites /lookup and /health to your backend.
+    const API = '';
 
-    // Stance labels (unchanged)
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
-    // New: map party -> colored badge (Dem=red, Rep=blue, Ind=yellow as requested)
+    // FIXED: Dem=blue, GOP=red, Ind=yellow
     const PARTY_STYLES = {
-      democrat:    { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
-      democratic:  { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
-      d:           { label: 'Democrat',    cls: 'bg-red-50 text-red-700 ring-red-200' },
+      democrat:    { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+      democratic:  { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+      d:           { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
 
-      republican:  { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-      gop:         { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-      r:           { label: 'Republican',  cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
+      republican:  { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
+      gop:         { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
+      r:           { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
 
       independent: { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
       unaffiliated:{ label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
@@ -62,13 +59,24 @@
       return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${conf.cls}">${conf.label}</span>`;
     }
 
-    // New: stance -> icon (thumbs/question)
+    // NEW: colored thumbs (SVG) right next to stance text
     function iconFor(stance) {
-      switch (stance) {
-        case 'support': return '👍';
-        case 'oppose':  return '👎';
-        default:        return '❓';
+      if (stance === 'support') {
+        return `
+          <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 9V5a3 3 0 0 0-3-3L7 11v11h11a2 2 0 0 0 2-2V9z"></path>
+            <path d="M7 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3"></path>
+          </svg>`;
+      } else if (stance === 'oppose') {
+        return `
+          <svg class="w-4 h-4 text-red-600" viewBox="0 0 24 24" fill="none"
+               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H6a2 2 0 0 0-2 2v11"></path>
+            <path d="M17 2h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3"></path>
+          </svg>`;
       }
+      return `<span class="text-slate-400 text-base leading-none" aria-hidden="true">?</span>`;
     }
 
     const addrEl = document.getElementById("addr");
@@ -81,8 +89,7 @@
 
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    // Selected issue slugs. Special token "ALL" means show everything.
-    let SELECTED = new Set(["ALL"]);
+    let SELECTED = new Set(["ALL"]); // "All" by default
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
@@ -102,7 +109,6 @@
         LAST_ISSUES = data.issues || [];
         LAST_REPS = data.reps || [];
 
-        // If this is the first load, default to ALL. Otherwise keep user selections.
         if (SELECTED.size === 0) SELECTED = new Set(["ALL"]);
         renderChecklist(LAST_ISSUES);
 
@@ -117,7 +123,6 @@
     }
 
     function renderChecklist(issues) {
-      // Build "All" first
       const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
       items.forEach((it, idx) => {
@@ -133,23 +138,13 @@
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
           if (it.slug === "ALL") {
-            // Toggling ALL overrides everything else
-            if (cb.checked) {
-              SELECTED = new Set(["ALL"]);
-            } else {
-              SELECTED = new Set(); // none selected
-            }
+            if (cb.checked) SELECTED = new Set(["ALL"]);
+            else SELECTED = new Set();
           } else {
-            // Selecting any specific issue clears ALL
-            if (cb.checked) {
-              SELECTED.delete("ALL");
-              SELECTED.add(it.slug);
-            } else {
-              SELECTED.delete(it.slug);
-              if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
-            }
+            if (cb.checked) { SELECTED.delete("ALL"); SELECTED.add(it.slug); }
+            else { SELECTED.delete(it.slug); if (SELECTED.size === 0) SELECTED.add("ALL"); }
           }
-          renderChecklist(issues);       // refresh checked states
+          renderChecklist(issues);
           renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
@@ -163,11 +158,9 @@
         return;
       }
 
-      // Build a quick lookup for issue metadata
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      // Decide which slugs to show
       const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
@@ -212,8 +205,8 @@
                 ${billHtml}
               </div>
             </div>
-            <div class="flex items-center gap-1 text-xs text-slate-600" aria-label="${STANCE_LABELS[stance]}">
-              <span class="text-base" aria-hidden="true">${iconFor(stance)}</span>
+            <div class="flex items-center gap-1 text-xs text-slate-700" aria-label="${STANCE_LABELS[stance]}">
+              ${iconFor(stance)}
               <span>${STANCE_LABELS[stance]}</span>
             </div>`;
           grid.appendChild(row);
