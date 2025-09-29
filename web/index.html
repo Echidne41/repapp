@@ -51,21 +51,16 @@
   </div>
 
   <script>
-    // Same-origin; Vercel rewrites /lookup, /health, /issues to your backend.
     const API = '';
-
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
-    // Party badges: Dem=blue, GOP=red, Ind=yellow
     const PARTY_STYLES = {
       democrat:    { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
       democratic:  { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
       d:           { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-
       republican:  { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
       gop:         { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
       r:           { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
-
       independent: { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
       unaffiliated:{ label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
       i:           { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' }
@@ -76,7 +71,6 @@
       return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${conf.cls}">${conf.label}</span>`;
     }
 
-    // Colored stance icons (green 👍, red 👎, gray ?)
     function iconFor(stance) {
       if (stance === 'support') {
         return `
@@ -96,7 +90,6 @@
       return `<span class="text-slate-400 text-base leading-none" aria-hidden="true">?</span>`;
     }
 
-    // ----- District display helpers -----
     const COUNTY_MAP = {
       BE:'Belknap', BEL:'Belknap',
       CA:'Carroll', CAR:'Carroll',
@@ -133,14 +126,12 @@
       const flSet = new Set((floterials||[]).map(canonicalDistrict).filter(Boolean));
       return function(d){
         const pretty = expandDistrict(d);
-        if (!pretty) return ''; // hide <NAN>/blank
+        if (!pretty) return '';
         const isFl = flSet.has(canonicalDistrict(pretty));
         return isFl ? `${pretty} (floterial)` : pretty;
       }
     }
-    // ------------------------------------
 
-    // State
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -153,9 +144,9 @@
     const issuesCountEl = document.getElementById("issuesCount");
     const issuesHintEl = document.getElementById("issuesHint");
 
-    let LAST_ISSUES = [];             // [{slug,label,bill,bill_url}]
+    let LAST_ISSUES = [];
     let LAST_REPS = [];
-    let SELECTED = new Set(["ALL"]);  // "All" by default
+    let SELECTED = new Set(["ALL"]);
 
     document.addEventListener("DOMContentLoaded", prefetchIssues);
     ddBtn.addEventListener("click", (e) => { e.stopPropagation(); ddPanel.classList.toggle("hidden"); });
@@ -172,7 +163,6 @@
     clearBtn.addEventListener("click",  (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); });
 
     async function prefetchIssues(){
-      // Load issues so users can pre-select before lookup.
       try{
         const r = await fetch(`${API}/issues`);
         if (!r.ok) throw new Error();
@@ -181,7 +171,6 @@
         renderChecklist(LAST_ISSUES);
         issuesHintEl.textContent = "Pick one or more issues to focus the results.";
       }catch(_){
-        // Backend might not have /issues; we’ll populate after first lookup.
         issuesHintEl.textContent = "Issues will load after your first search.";
         listEl.innerHTML = "";
         updateIssuesCount();
@@ -206,7 +195,6 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
 
-        // Update issues list if we didn’t have it yet
         if (!LAST_ISSUES.length && Array.isArray(data.issues)) {
           LAST_ISSUES = data.issues;
           renderChecklist(LAST_ISSUES);
@@ -214,8 +202,6 @@
 
         LAST_REPS = data.reps || [];
         statusEl.textContent = statusLine(data);
-
-        // Render reps with client-side filter too (in case server ignored ?issues=)
         renderReps(LAST_REPS, LAST_ISSUES, new Set(slugs.length ? slugs : ["ALL"]), data.floterials || []);
       } catch (_) {
         statusEl.textContent = "Error contacting server.";
@@ -241,7 +227,7 @@
             SELECTED.add(it.slug);
           } else {
             SELECTED.delete(it.slug);
-            if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to All
+            if (SELECTED.size === 0) SELECTED.add("ALL");
           }
           updateIssuesCount();
         });
@@ -271,11 +257,13 @@
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
+        // NEW: skip NaN/blank district cards (only change here)
+        const districtRaw = getRepDistrict(rep);
+        if (isNanLike(districtRaw)) continue;
+        const districtPretty = formatRepDistrict(districtRaw);
+
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
-
-        const districtRaw = getRepDistrict(rep);
-        const districtPretty = formatRepDistrict(districtRaw);
 
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
