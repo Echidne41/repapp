@@ -104,14 +104,64 @@ for feat in getattr(GEO, "items", []) or []:
 # ----------------------------
 # Geocoding + helpers
 # ----------------------------
+
+# --- add near your other helpers ---
+import re
+
+def _split_addr(one_line: str):
+    """Extract street, city (NH only), and ZIP if present."""
+    s = (one_line or "").strip()
+    street = s.split(",", 1)[0].strip()
+    m_city = re.search(r",\s*([^,]+?),\s*NH\b", s, flags=re.I)
+    city = (m_city.group(1).strip() if m_city else "") or ""
+    city_up = city.upper()
+    # Normalize common alias
+    if city_up in {"WEST LEBANON", "W LEBANON"}:
+        city = "Lebanon"
+    m_zip = re.search(r"\b(\d{5})(?:-\d{4})?\b", s)
+    zip5 = m_zip.group(1) if m_zip else None
+    return street, city, zip5
+
+def _geocode_census_structured(street: str, city: str | None, zip5: str | None):
+    """Census structured endpoint is more reliable for NH addresses."""
+    if not street:
+        return None, None, ""
+    url = "https://geocoding.geo.census.gov/geocoder/locations/address"
+    params = {"benchmark": "Public_AR_Current", "format": "json", "state": "NH", "street": street}
+    if city: params["city"] = city
+    if zip5: params["zip"] = zip5
+    try:
+        r = requests.get(url, params=params, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        matches = (data.get("result") or {}).get("addressMatches") or []
+        if not matches:
+            return None, None, ""
+        m0 = matches[0]
+        coords = m0.get("coordinates") or {}
+        lon = coords.get("x"); lat = coords.get("y")
+        comps = m0.get("addressComponents") or {}
+        town = (comps.get("city") or comps.get("place") or comps.get("county") or "").upper().strip()
+        if lat is None or lon is None:
+            return None, None, ""
+        return float(lat), float(lon), town
+    except Exception:
+        return None, None, ""
+
 def _sanitize_address(a: str) -> str:
     if not a:
         return a
     return re.sub(r",?\s*(apt|apartment|unit|ste|suite|#)\s*[^\s,]+", "", a, flags=re.I)
 
 def _geocode_census(one_line: str):
+    """Try structured first (NH-scoped), then your current oneline fallback."""
     if not one_line:
         return None, None, ""
+    street, city, zip5 = _split_addr(one_line)
+    lat, lon, town = _geocode_census_structured(street, city or None, zip5)
+    if lat is not None and lon is not None:
+        return lat, lon, town
+    # fallback: try the existing oneline endpoint (your original logic)
     url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
     params = {"address": one_line, "benchmark": "Public_AR_Current", "format": "json"}
     try:
@@ -131,6 +181,7 @@ def _geocode_census(one_line: str):
         return float(lat), float(lon), town
     except Exception:
         return None, None, ""
+
 
 def _base_from_point(lat: float, lon: float):
     if not DIST_SHAPES:
