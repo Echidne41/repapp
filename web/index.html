@@ -11,245 +11,142 @@
     <h1 class="text-2xl font-semibold">NH Rep Finder</h1>
     <p class="text-sm text-slate-600">Enter your NH address to see your House reps and where they stood on key votes.</p>
 
-    <!-- Address FIRST -->
     <div class="mt-4 flex gap-2">
       <input id="addr" class="flex-1 border rounded-lg px-3 py-2" placeholder="123 Main St, Town, NH"/>
-      <button id="go" type="button" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
+      <button id="go" class="px-4 py-2 rounded-lg bg-indigo-600 text-white">Find my reps</button>
     </div>
 
-    <!-- Issues dropdown SECOND -->
-    <div class="mt-3 relative inline-block">
-      <button id="issuesBtn" type="button"
-              class="inline-flex items-center gap-2 rounded-lg border bg-white px-3 py-2 text-sm shadow-sm">
-        <span>Choose issues</span>
-        <span id="issuesCount" class="text-xs text-slate-500">All</span>
-        <svg class="w-4 h-4 text-slate-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-          <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.06 1.06l-4.24 4.24a.75.75 0 01-1.06 0L5.21 8.29a.75.75 0 01.02-1.08z" clip-rule="evenodd"/>
-        </svg>
-      </button>
-
-      <!-- Dropdown panel -->
-      <div id="issuesDropdown"
-           class="absolute left-0 z-10 mt-2 w-full sm:w-80 rounded-lg border bg-white shadow-lg p-2 hidden">
-        <div class="flex items-center justify-between px-1 pb-2">
-          <div id="issuesHint" class="text-xs text-slate-600">Loading issues…</div>
-          <div class="flex gap-2">
-            <button id="selectAllBtn" type="button" class="text-xs underline text-indigo-700">Select all</button>
-            <button id="clearBtn" type="button" class="text-xs underline text-indigo-700">Clear</button>
-          </div>
-        </div>
-        <!-- Single-column, scrollable checklist -->
-        <div id="issueChecklist" class="max-h-64 overflow-y-auto flex flex-col gap-1 px-1"></div>
-      </div>
-    </div>
-
-    <!-- Top status line: Districts: ... -->
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
 
-    <!-- Results -->
+    <!-- Multi-select filters -->
+    <div class="mt-4">
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium">Show issues:</label>
+        <div class="flex gap-2">
+          <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
+          <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
+        </div>
+      </div>
+      <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+    </div>
+
     <div id="results" class="mt-4 grid gap-4"></div>
   </div>
 
   <script>
-    const API = '';
+    // API: Vercel => talk to Render; local Flask => same-origin
+    const API = location.hostname.endsWith('vercel.app')
+      ? 'https://repapp-9lq6.onrender.com'
+      : '';
+
+    // helpers
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
-
-    const PARTY_STYLES = {
-      democrat:    { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-      democratic:  { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-      d:           { label: 'Democrat',    cls: 'bg-blue-50 text-blue-700 ring-blue-200' },
-      republican:  { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
-      gop:         { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
-      r:           { label: 'Republican',  cls: 'bg-red-50 text-red-700 ring-red-200' },
-      independent: { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
-      unaffiliated:{ label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' },
-      i:           { label: 'Independent', cls: 'bg-yellow-50 text-yellow-800 ring-yellow-200' }
+    const clean = (v) => {
+      const t = (v ?? "").toString().trim();
+      return t.toLowerCase() === "nan" ? "" : t;
     };
-    function partyBadge(partyRaw) {
-      const key = String(partyRaw || '').trim().toLowerCase();
-      const conf = PARTY_STYLES[key] || { label: partyRaw || 'Unknown', cls: 'bg-gray-50 text-gray-700 ring-gray-200' };
-      return `<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ring-1 ring-inset ${conf.cls}">${conf.label}</span>`;
-    }
+    const isHttpUrl = (s) => /^https?:\/\//i.test((s || "").trim());
 
-    function iconFor(stance) {
-      if (stance === 'support') {
-        return `
-          <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M14 9V5a3 3 0 0 0-3-3L7 11v11h11a2 2 0 0 0 2-2V9z"></path>
-            <path d="M7 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h3"></path>
-          </svg>`;
-      } else if (stance === 'oppose') {
-        return `
-          <svg class="w-4 h-4 text-red-600" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H6a2 2 0 0 0-2 2v11"></path>
-            <path d="M17 2h3a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-3"></path>
-          </svg>`;
-      }
-      return `<span class="text-slate-400 text-base leading-none" aria-hidden="true">?</span>`;
-    }
-
-    const COUNTY_MAP = {
-      BE:'Belknap', BEL:'Belknap',
-      CA:'Carroll', CAR:'Carroll',
-      CH:'Cheshire', CHS:'Cheshire',
-      CO:'Coos', COO:'Coos', COOS:'Coos',
-      GR:'Grafton', GRA:'Grafton',
-      HI:'Hillsborough', HIL:'Hillsborough',
-      MR:'Merrimack', ME:'Merrimack', MER:'Merrimack',
-      RO:'Rockingham', ROC:'Rockingham',
-      ST:'Strafford', STR:'Strafford',
-      SU:'Sullivan', SUL:'Sullivan'
-    };
-    function titleCase(s){return String(s).toLowerCase().replace(/\b\w/g,c=>c.toUpperCase());}
-    function isNanLike(x){ if(x==null) return true; const s=String(x).trim(); return !s || /^nan$/i.test(s) || /<\s*nan\s*>/i.test(s);}
-    function expandDistrict(raw){
-      if (isNanLike(raw)) return null;
-      let t = String(raw).replace(/[–—-]+/g,' ').replace(/\s+/g,' ').trim();
-      let m = t.match(/^([A-Za-z]+)\s*(\d+)$/);
-      if (m){ const code=m[1].toUpperCase(), num=m[2]; const name = COUNTY_MAP[code] || titleCase(m[1]); return `${name} ${num}`; }
-      m = t.match(/^(.+?)\s+(\d+)$/); if (m) return `${titleCase(m[1])} ${m[2]}`;
-      return titleCase(t);
-    }
-    function canonicalDistrict(d){ const e=expandDistrict(d); return e?e.replace(/\s+/g,' ').toLowerCase():null; }
-    function statusLine(data){
-      const combined = [ data.base_district || data.base_code || null, ...(Array.isArray(data.floterials)?data.floterials:[]) ]
-        .filter(x => !isNanLike(x));
-      const pretty = [...new Set(combined.map(expandDistrict).filter(Boolean))];
-      return pretty.length ? `Districts: ${pretty.join(', ')}` : '';
-    }
-    function getRepDistrict(rep){
-      return rep.district ?? rep.District ?? rep.house_district ?? rep.houseDistrict ?? rep['House District'] ?? '';
-    }
-    function makeRepDistrictFormatter(floterials){
-      const flSet = new Set((floterials||[]).map(canonicalDistrict).filter(Boolean));
-      return function(d){
-        const pretty = expandDistrict(d);
-        if (!pretty) return '';
-        const isFl = flSet.has(canonicalDistrict(pretty));
-        return isFl ? `${pretty} (floterial)` : pretty;
-      }
-    }
-
+    // DOM
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
     const resultsEl = document.getElementById("results");
-    const ddBtn = document.getElementById("issuesBtn");
-    const ddPanel = document.getElementById("issuesDropdown");
     const listEl = document.getElementById("issueChecklist");
     const selectAllBtn = document.getElementById("selectAllBtn");
     const clearBtn = document.getElementById("clearBtn");
-    const issuesCountEl = document.getElementById("issuesCount");
-    const issuesHintEl = document.getElementById("issuesHint");
 
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    let SELECTED = new Set(["ALL"]);
-
-    document.addEventListener("DOMContentLoaded", prefetchIssues);
-    ddBtn.addEventListener("click", (e) => { e.stopPropagation(); ddPanel.classList.toggle("hidden"); });
-    document.addEventListener("click", (e) => {
-      if (!ddPanel.classList.contains("hidden")) {
-        if (!ddPanel.contains(e.target) && e.target !== ddBtn && !ddBtn.contains(e.target)) ddPanel.classList.add("hidden");
-      }
-    });
-    document.addEventListener("keydown", (e) => { if (e.key === "Escape") ddPanel.classList.add("hidden"); });
+    let SELECTED = new Set(["ALL"]); // special token
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
-    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); });
-    clearBtn.addEventListener("click",  (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); });
-
-    async function prefetchIssues(){
-      try{
-        const r = await fetch(`${API}/issues`);
-        if (!r.ok) throw new Error();
-        const data = await r.json();
-        LAST_ISSUES = data.issues || [];
-        renderChecklist(LAST_ISSUES);
-        issuesHintEl.textContent = "Pick one or more issues to focus the results.";
-      }catch(_){
-        issuesHintEl.textContent = "Issues will load after your first search.";
-        listEl.innerHTML = "";
-        updateIssuesCount();
-      }
-    }
-
-    function selectedSlugs(){
-      if (SELECTED.has("ALL") || SELECTED.size === 0) return [];
-      return [...SELECTED];
-    }
+    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
       if (!a) { addrEl.focus(); return; }
       resultsEl.innerHTML = "";
       statusEl.textContent = "Looking up…";
-      const slugs = selectedSlugs();
-      const qs = new URLSearchParams({ address: a });
-      if (slugs.length) qs.set("issues", slugs.join(","));
       try {
-        const r = await fetch(`${API}/lookup?${qs.toString()}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const r = await fetch(`${API}/lookup?address=${encodeURIComponent(a)}`);
+        if (!r.ok) {
+          if (r.status === 422) {
+            statusEl.textContent = "Couldn’t find that address. Try a simpler format (e.g., '95 Alta Blvd, Lebanon, NH').";
+            return;
+          }
+          throw new Error(`HTTP ${r.status}`);
+        }
         const data = await r.json();
 
-        if (!LAST_ISSUES.length && Array.isArray(data.issues)) {
-          LAST_ISSUES = data.issues;
-          renderChecklist(LAST_ISSUES);
-        }
+        LAST_ISSUES = (data.issues || []).map(it => ({
+          ...it,
+          label: clean(it.label),
+          bill: clean(it.bill),
+          bill_url: clean(it.bill_url)
+        }));
+        LAST_REPS = (data.reps || []).filter(rep => {
+          // hide junk rows that somehow slipped through
+          const name = clean(rep.name), dist = clean(rep.district);
+          return !!(name || dist);
+        });
 
-        LAST_REPS = data.reps || [];
-        statusEl.textContent = statusLine(data);
-        renderReps(LAST_REPS, LAST_ISSUES, new Set(slugs.length ? slugs : ["ALL"]), data.floterials || []);
-      } catch (_) {
+        if (SELECTED.size === 0) SELECTED = new Set(["ALL"]);
+        renderChecklist(LAST_ISSUES);
+
+        const base = clean(data.base_district || data.base_code || "?");
+        const flots = (data.floterials || []).join(", ");
+        statusEl.textContent = `Base: ${base}${flots ? " · Floterials: " + flots : ""}`;
+
+        renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+      } catch (e) {
         statusEl.textContent = "Error contacting server.";
       }
     }
 
     function renderChecklist(issues) {
+      const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
-      issues.forEach((it, idx) => {
+      items.forEach((it, idx) => {
         const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.has("ALL") || SELECTED.has(it.slug);
+        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
         const row = document.createElement("label");
-        row.className = "flex items-center gap-2 rounded-md border bg-white px-3 py-2";
+        row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
-          <span class="text-sm">${it.label || it.slug}</span>
+          <span class="text-sm">${clean(it.label || it.slug)}</span>
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (cb.checked) {
-            SELECTED.delete("ALL");
-            SELECTED.add(it.slug);
+          if (it.slug === "ALL") {
+            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
           } else {
-            SELECTED.delete(it.slug);
-            if (SELECTED.size === 0) SELECTED.add("ALL");
+            if (cb.checked) {
+              SELECTED.delete("ALL");
+              SELECTED.add(it.slug);
+            } else {
+              SELECTED.delete(it.slug);
+              if (SELECTED.size === 0) SELECTED.add("ALL");
+            }
           }
-          updateIssuesCount();
+          renderChecklist(issues);
+          renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
       });
-      updateIssuesCount();
     }
 
-    function updateIssuesCount(){
-      const slugs = selectedSlugs();
-      issuesCountEl.textContent = slugs.length ? `${slugs.length} selected` : 'All';
-    }
-
-    function renderReps(reps, issues, selectedSet, floterials = []) {
+    function renderReps(reps, issues, selectedSet) {
       resultsEl.innerHTML = "";
       if (!reps.length) {
         resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
         return;
       }
 
-      const formatRepDistrict = makeRepDistrictFormatter(floterials);
-
+      // lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
@@ -257,10 +154,9 @@
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
-        // NEW: skip NaN/blank district cards (only change here)
-        const districtRaw = getRepDistrict(rep);
-        if (isNanLike(districtRaw)) continue;
-        const districtPretty = formatRepDistrict(districtRaw);
+        const name = clean(rep.name);
+        const party = clean(rep.party);
+        const district = clean(rep.district);
 
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
@@ -269,11 +165,8 @@
         header.className = "flex items-baseline justify-between";
         header.innerHTML = `
           <div>
-            <div class="text-lg font-semibold">${rep.name}</div>
-            <div class="mt-0.5 flex items-center gap-2">
-              ${partyBadge(rep.party || rep.Party)}
-              ${districtPretty ? `<span class="text-sm text-slate-600">${districtPretty}</span>` : ``}
-            </div>
+            <div class="text-lg font-semibold">${name || "Unknown rep"}</div>
+            <div class="text-sm text-slate-600">${[party, district].filter(Boolean).join(" · ")}</div>
           </div>`;
         card.appendChild(header);
 
@@ -285,27 +178,29 @@
           if (!issue) continue;
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
           const stance = v.stance;
+          const dot = stance === "support" ? "bg-green-500"
+                    : stance === "oppose"  ? "bg-red-500"
+                    : "bg-yellow-400";
 
-          const hasLink = (issue.bill_url || "").trim().length > 0;
-          const billHtml = issue.bill
-            ? (hasLink
-                ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
-                : `<span class="text-xs text-slate-600">${issue.bill}</span>`)
+          const billTxt = clean(issue.bill);
+          const url = clean(issue.bill_url);
+          const billHtml = billTxt
+            ? (isHttpUrl(url)
+                ? `<a class="text-xs text-indigo-700 underline" href="${url}" target="_blank" rel="noopener">${billTxt}</a>`
+                : `<span class="text-xs text-slate-600">${billTxt}</span>`)
             : "";
 
           const row = document.createElement("div");
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
+              <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
-                <span class="text-sm font-medium">${issue.label || slug}</span>
+                <span class="text-sm font-medium">${clean(issue.label || slug)}</span>
                 ${billHtml}
               </div>
             </div>
-            <div class="flex items-center gap-1 text-xs text-slate-700" aria-label="${STANCE_LABELS[stance]}">
-              ${iconFor(stance)}
-              <span>${STANCE_LABELS[stance]}</span>
-            </div>`;
+            <div class="text-xs text-slate-500">${STANCE_LABELS[stance]}</div>`;
           grid.appendChild(row);
         }
 
