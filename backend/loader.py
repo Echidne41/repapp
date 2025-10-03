@@ -1,4 +1,4 @@
-# backend/loader.py  — clean, copy/paste-safe
+# backend/loader.py — drop-in
 import os, io, re, json
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -7,13 +7,15 @@ import pandas as pd
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("NHRF_DATA_DIR") or os.path.join(HERE, "data")
 
+# Data files (env overrides optional)
 VOTES_CSV    = os.path.join(DATA_DIR, "house_key_votes.csv")
 ISSUES_CSV   = os.path.join(DATA_DIR, "issues.csv")
-GEOJSON_BASE = os.path.join(DATA_DIR, "nh_house_districts.json")   # optional
-FLOT_BASE    = os.path.join(DATA_DIR, "floterial_by_base.csv")     # optional
-FLOT_TOWN    = os.path.join(DATA_DIR, "floterial_by_town.csv")     # optional
+GEOJSON_BASE = os.path.join(DATA_DIR, "nh_house_districts.json")
+FLOT_BASE    = os.path.join(DATA_DIR, "floterial_by_base.csv")
+FLOT_TOWN    = os.path.join(DATA_DIR, "floterial_by_town.csv")
 
 def district_key_variants(d: str) -> List[str]:
+    """Tolerant keys for indexing by district string."""
     if not d:
         return []
     s = str(d).strip()
@@ -32,37 +34,20 @@ def _df_from_source(path_or_url: str) -> pd.DataFrame:
         return pd.read_csv(io.StringIO(r.text))
     return pd.read_csv(path_or_url)
 
-@dataclass
-class IssueDef:
-    slug: str
-    csv_header: str
-    label: str
-    bill: str
-    bill_url: str
-    support_when: str  # 'Y' = Yes means support, 'N' = No means support
-
-def _load_issues() -> List[IssueDef]:
-    if not os.path.exists(ISSUES_CSV):
-        return []
-    df = pd.read_csv(ISSUES_CSV)
-    out: List[IssueDef] = []
-    for _, r in df.iterrows():
-        slug = str(r.get("slug") or "").strip()
-        csv_header = str(r.get("csv_header") or "").strip()
-        label = str(r.get("label") or csv_header).strip()
-        bill = str(r.get("bill") or "").strip()
-        bill_url = str(r.get("bill_url") or "").strip()
-        sw = str(r.get("support_when") or "Y").strip().upper()
-        out.append(IssueDef(
-            slug=slug, csv_header=csv_header, label=label,
-            bill=bill, bill_url=bill_url, support_when=("N" if sw == "N" else "Y")
-        ))
-    return out
+# ---------- Normalizers ----------
+def _norm(x):
+    """None, real NaN, or literal 'nan'/case variants -> ''; else trimmed str."""
+    if x is None or (isinstance(x, float) and pd.isna(x)):
+        return ""
+    s = str(x).strip()
+    return "" if s.lower() == "nan" else s
 
 YES_TOKENS = {"Y","YES","YEA","AYE","PRO","FOR","APPROVE","APPROVED"}
 NO_TOKENS  = {"N","NO","NAY","AGAINST","ANTI","REJECT","REJECTED"}
-NOVOTE_TOKENS = {"NV","N/V","ABSTAIN","ABSTENTION","ABSENT","EXCUSED","PRESENT","—","","NA","N/A",
-                 "DID NOT VOTE","DIDN'T VOTE"}
+NOVOTE_TOKENS = {
+    "NV","N/V","ABSTAIN","ABSTENTION","ABSENT","EXCUSED","PRESENT","—","","NA","N/A",
+    "DID NOT VOTE","DIDN'T VOTE"
+}
 
 def _cell_to_yn(cell) -> str:
     if cell is None or (isinstance(cell, float) and pd.isna(cell)):
@@ -75,7 +60,37 @@ def _cell_to_yn(cell) -> str:
     if U in NO_TOKENS:  return "N"
     return "NV"
 
+# ---------- Issues ----------
+@dataclass
+class IssueDef:
+    slug: str
+    csv_header: str
+    label: str
+    bill: str
+    bill_url: str
+    support_when: str  # 'Y' | 'N'
+
+def _load_issues() -> List[IssueDef]:
+    if not os.path.exists(ISSUES_CSV):
+        return []
+    df = pd.read_csv(ISSUES_CSV)
+    out: List[IssueDef] = []
+    for _, r in df.iterrows():
+        slug       = _norm(r.get("slug"))
+        csv_header = _norm(r.get("csv_header"))
+        label      = _norm(r.get("label") or csv_header)
+        bill       = _norm(r.get("bill"))
+        bill_url   = _norm(r.get("bill_url"))
+        sw         = _norm(r.get("support_when")).upper()
+        out.append(IssueDef(
+            slug=slug, csv_header=csv_header, label=label,
+            bill=bill, bill_url=bill_url, support_when=("N" if sw == "N" else "Y")
+        ))
+    return out
+
+# ---------- Public loaders ----------
 def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[dict]]:
+    """Return (reps_by_district, rep_info, issues_list)."""
     votes_src = os.environ.get("NHRF_VOTES_SRC") or VOTES_CSV
     if not (str(votes_src).lower().startswith("http") or os.path.exists(votes_src)):
         raise FileNotFoundError(f"Missing votes CSV: {votes_src}")
@@ -87,6 +102,7 @@ def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[dict]]:
 
     issues = _load_issues()
     if not issues:
+        # Derive issues from CSV headers if issues.csv missing
         raw_cols = [c for c in df.columns if c not in (name_col, dist_col, party_col, "openstates_person_id")]
         def slugify(x): return re.sub(r"[^a-z0-9]+","_", x.lower()).strip("_")
         issues = [IssueDef(slug=slugify(c), csv_header=c, label=c, bill="", bill_url="", support_when="Y") for c in raw_cols]
@@ -95,10 +111,14 @@ def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[dict]]:
     rep_info: Dict[str, dict] = {}
 
     for _, row in df.iterrows():
-        rid = str(row.get("openstates_person_id") or f"{row[name_col]}|{row[dist_col]}")
-        nm  = str(row[name_col]).strip()
-        dist= str(row[dist_col]).strip()
-        par = str(row[party_col]).strip()
+        rid  = str(row.get("openstates_person_id") or f"{row[name_col]}|{row[dist_col]}")
+        nm   = _norm(row.get(name_col))
+        dist = _norm(row.get(dist_col))
+        par  = _norm(row.get(party_col))
+
+        # Drop junk rows so no 'nan' cards appear
+        if not nm or not dist:
+            continue
 
         votes = {}
         for it in issues:
@@ -109,48 +129,54 @@ def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[dict]]:
             else:
                 yes_means_support = (it.support_when == "Y")
                 stance = "support" if ((yn == "Y") == yes_means_support) else "oppose"
-            votes[it.slug] = {
-                "stance": stance,
-                "raw": "" if (raw is None or (isinstance(raw, float) and pd.isna(raw))) else str(raw).strip(),
-                "vote": yn
-            }
+            votes[it.slug] = {"stance": stance, "raw": _norm(raw), "vote": yn}
 
         rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
         for key in district_key_variants(dist):
             reps_by_district.setdefault(key, []).append(rid)
 
-    issues_out = [dict(slug=it.slug, label=it.label, bill=it.bill, bill_url=it.bill_url,
-                       support_when=it.support_when, csv_header=it.csv_header) for it in issues]
+    issues_out = [dict(
+        slug=i.slug, label=i.label, bill=i.bill, bill_url=i.bill_url,
+        support_when=i.support_when, csv_header=i.csv_header
+    ) for i in issues]
+
     return reps_by_district, rep_info, issues_out
 
 class _GeoIndex:
     """Lightweight holder so /health can report polygon count."""
     def __init__(self, path: str):
         self.items: List[dict] = []
+        self.path = path
         if path and os.path.exists(path):
             with open(path, "r", encoding="utf-8") as f:
                 gj = json.load(f)
-            feats = gj.get("features") or []
-            self.items = feats
+            self.items = gj.get("features") or []
 
 def load_geoindex() -> _GeoIndex:
     return _GeoIndex(GEOJSON_BASE)
 
 def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    """Return (BASE_TO_FLOTS, TOWN_TO_FLOTS). Accepts multiple header spellings."""
     base_to_flots: Dict[str, List[str]] = {}
     town_to_flots: Dict[str, List[str]] = {}
+
     if os.path.exists(FLOT_BASE):
         df = pd.read_csv(FLOT_BASE)
         for _, r in df.iterrows():
-            base = str(r.get("base") or r.get("Base") or r.get("BASE") or "").strip()
-            flot = str(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or "").strip()
+            base = _norm(r.get("base") or r.get("Base") or r.get("BASE") or
+                         r.get("base_district") or r.get("Base_District") or r.get("BASE_DISTRICT"))
+            flot = _norm(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or
+                         r.get("floterial_district") or r.get("Floterial_District") or r.get("FLOTERIAL_DISTRICT"))
             if base and flot:
                 base_to_flots.setdefault(base, []).append(flot)
+
     if os.path.exists(FLOT_TOWN):
         df = pd.read_csv(FLOT_TOWN)
         for _, r in df.iterrows():
-            town = str(r.get("town") or r.get("Town") or r.get("TOWN") or "").strip().upper()
-            flot = str(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or "").strip()
+            town = _norm(r.get("town") or r.get("Town") or r.get("TOWN")).upper()
+            flot = _norm(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or
+                         r.get("floterial_district") or r.get("Floterial_District") or r.get("FLOTERIAL_DISTRICT"))
             if town and flot:
                 town_to_flots.setdefault(town, []).append(flot)
+
     return base_to_flots, town_to_flots
