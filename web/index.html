@@ -51,23 +51,14 @@
 
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    // Default = empty selection (user must choose issues)
+    // Selected issue slugs. Special token "ALL" means show everything.
+    // Default: none checked on first render.
     let SELECTED = new Set();
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
-    selectAllBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      SELECTED = new Set(["ALL"]);
-      renderChecklist(LAST_ISSUES);
-      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
-    });
-    clearBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      SELECTED = new Set();
-      renderChecklist(LAST_ISSUES);
-      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
-    });
+    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
@@ -76,19 +67,13 @@
       statusEl.textContent = "Looking up…";
       try {
         const r = await fetch(`${API}/lookup?address=${encodeURIComponent(a)}`);
-        if (!r.ok) {
-          if (r.status === 422) {
-            statusEl.textContent = "Couldn’t find that address. Try a simpler format (e.g., '95 Alta Blvd, Lebanon, NH').";
-            return;
-          }
-          throw new Error(`HTTP ${r.status}`);
-        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
 
         LAST_ISSUES = data.issues || [];
         LAST_REPS = data.reps || [];
 
-        // Do NOT auto-select anything; user chooses
+        // Keep current selection; default is none checked.
         renderChecklist(LAST_ISSUES);
 
         statusEl.textContent =
@@ -102,6 +87,7 @@
     }
 
     function renderChecklist(issues) {
+      // Build "All" first
       const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
       items.forEach((it, idx) => {
@@ -117,17 +103,23 @@
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
           if (it.slug === "ALL") {
-            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
+            // Toggling ALL overrides everything else
+            if (cb.checked) {
+              SELECTED = new Set(["ALL"]);
+            } else {
+              SELECTED = new Set(); // none selected
+            }
           } else {
+            // Selecting any specific issue clears ALL
             if (cb.checked) {
               SELECTED.delete("ALL");
               SELECTED.add(it.slug);
             } else {
               SELECTED.delete(it.slug);
-              // If user clears the last one, leave it empty (do not re-select ALL)
+              if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
             }
           }
-          renderChecklist(issues);
+          renderChecklist(issues);       // refresh checked states
           renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
@@ -141,11 +133,12 @@
         return;
       }
 
+      // Build a quick lookup for issue metadata
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      // New: empty set means show none; "ALL" means show everything
-      const showAll = selectedSet.has("ALL");
+      // Decide which slugs to show
+      const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
@@ -164,7 +157,6 @@
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
 
-        // If no issues selected, render nothing (user must choose)
         for (const slug of shownSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
@@ -174,7 +166,7 @@
                     : stance === "oppose"  ? "bg-red-500"
                     : "bg-yellow-400";
 
-          const hasLink = (issue.bill_url || "").trim().startsWith("http");
+          const hasLink = (issue.bill_url || "").trim().length > 0;
           const billHtml = issue.bill
             ? (hasLink
                 ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
