@@ -41,6 +41,17 @@
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
+    // Front-end sanitizer for Pandas/CSV "NaN" and real NaN
+    function clean(v) {
+      if (v == null) return "";
+      if (typeof v === "number" && Number.isNaN(v)) return "";
+      if (typeof v === "string") {
+        const s = v.trim();
+        return s.toLowerCase() === "nan" ? "" : s;
+      }
+      return v;
+    }
+
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -96,9 +107,10 @@
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
+        const labelTxt = clean(it.label) || it.slug;
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
-          <span class="text-sm">${it.label || it.slug}</span>
+          <span class="text-sm">${labelTxt}</span>
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
@@ -160,17 +172,22 @@
         for (const slug of shownSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
+
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
           const stance = v.stance;
           const dot = stance === "support" ? "bg-green-500"
                     : stance === "oppose"  ? "bg-red-500"
                     : "bg-yellow-400";
 
-          const hasLink = (issue.bill_url || "").trim().length > 0;
-          const billHtml = issue.bill
+          const label   = clean(issue.label) || slug;
+          const billTxt = clean(issue.bill);
+          const billUrl = clean(issue.bill_url);
+          const hasLink = !!billUrl;
+
+          const billHtml = billTxt
             ? (hasLink
-                ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
-                : `<span class="text-xs text-slate-600">${issue.bill}</span>`)
+                ? `<a class="text-xs text-indigo-700 underline" href="${billUrl}" target="_blank" rel="noopener">${billTxt}</a>`
+                : `<span class="text-xs text-slate-600">${billTxt}</span>`)
             : "";
 
           const row = document.createElement("div");
@@ -179,7 +196,7 @@
             <div class="flex items-center gap-2">
               <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
-                <span class="text-sm font-medium">${issue.label || slug}</span>
+                <span class="text-sm font-medium">${label}</span>
                 ${billHtml}
               </div>
             </div>
