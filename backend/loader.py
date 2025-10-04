@@ -1,4 +1,4 @@
-# backend/loader.py — drop-in (only change: NV -> raw == "")
+# backend/loader.py — stable; NV -> raw == ""
 import os, io, re, json
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
@@ -90,4 +90,94 @@ def _load_issues() -> List[IssueDef]:
 
 # ---------- Public loaders ----------
 def load_votes() -> Tuple[Dict[str, List[str]], Dict[str, dict], List[dict]]:
-    """Return (rep
+    """Return (reps_by_district, rep_info, issues_list)."""
+    votes_src = os.environ.get("NHRF_VOTES_SRC") or VOTES_CSV
+    if not (str(votes_src).lower().startswith("http") or os.path.exists(votes_src)):
+        raise FileNotFoundError(f"Missing votes CSV: {votes_src}")
+    df = _df_from_source(votes_src)
+
+    name_col  = next(c for c in df.columns if c.lower() in ("name","rep","representative"))
+    dist_col  = next(c for c in df.columns if "district" in c.lower())
+    party_col = next(c for c in df.columns if "party" in c.lower())
+
+    issues = _load_issues()
+    if not issues:
+        # Derive issues from CSV headers if issues.csv missing
+        raw_cols = [c for c in df.columns if c not in (name_col, dist_col, party_col, "openstates_person_id")]
+        def slugify(x): return re.sub(r"[^a-z0-9]+","_", x.lower()).strip("_")
+        issues = [IssueDef(slug=slugify(c), csv_header=c, label=c, bill="", bill_url="", support_when="Y") for c in raw_cols]
+
+    reps_by_district: Dict[str, List[str]] = {}
+    rep_info: Dict[str, dict] = {}
+
+    for _, row in df.iterrows():
+        rid  = str(row.get("openstates_person_id") or f"{row[name_col]}|{row[dist_col]}")
+        nm   = _norm(row.get(name_col))
+        dist = _norm(row.get(dist_col))
+        par  = _norm(row.get(party_col))
+
+        votes = {}
+        for it in issues:
+            raw = row.get(it.csv_header)
+            yn = _cell_to_yn(raw)
+            if yn == "NV":
+                stance = "no_vote"
+            else:
+                yes_means_support = (it.support_when == "Y")
+                stance = "support" if ((yn == "Y") == yes_means_support) else "oppose"
+            votes[it.slug] = {
+                "stance": stance,
+                "raw": ("" if yn == "NV" else _norm(raw)),  # <-- only change: blank raw for NV (no 'nan')
+                "vote": yn
+            }
+
+        rep_info[rid] = {"id": rid, "name": nm, "party": par, "district": dist, "votes": votes}
+        for key in district_key_variants(dist):
+            reps_by_district.setdefault(key, []).append(rid)
+
+    issues_out = [dict(
+        slug=i.slug, label=i.label, bill=i.bill, bill_url=i.bill_url,
+        support_when=i.support_when, csv_header=i.csv_header
+    ) for i in issues]
+
+    return reps_by_district, rep_info, issues_out
+
+# ---- Geo index (unchanged) ----
+class _GeoIndex:
+    """Lightweight holder so /health can report polygon count."""
+    def __init__(self, path: str):
+        self.items: List[dict] = []
+        self.path = path
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                gj = json.load(f)
+            self.items = gj.get("features") or []
+
+def load_geoindex() -> _GeoIndex:
+    return _GeoIndex(GEOJSON_BASE)
+
+def load_floterials() -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
+    """Return (BASE_TO_FLOTS, TOWN_TO_FLOTS). Accepts common header spellings; same behavior."""
+    base_to_flots: Dict[str, List[str]] = {}
+    town_to_flots: Dict[str, List[str]] = {}
+
+    if os.path.exists(FLOT_BASE):
+        df = pd.read_csv(FLOT_BASE)
+        for _, r in df.iterrows():
+            base = _norm(r.get("base") or r.get("Base") or r.get("BASE") or
+                         r.get("base_district") or r.get("Base_District") or r.get("BASE_DISTRICT"))
+            flot = _norm(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or
+                         r.get("floterial_district") or r.get("Floterial_District") or r.get("FLOTERIAL_DISTRICT"))
+            if base and flot:
+                base_to_flots.setdefault(base, []).append(flot)
+
+    if os.path.exists(FLOT_TOWN):
+        df = pd.read_csv(FLOT_TOWN)
+        for _, r in df.iterrows():
+            town = _norm(r.get("town") or r.get("Town") or r.get("TOWN")).upper()
+            flot = _norm(r.get("floterial") or r.get("Floterial") or r.get("FLOTERIAL") or
+                         r.get("floterial_district") or r.get("Floterial_District") or r.get("FLOTERIAL_DISTRICT"))
+            if town and flot:
+                town_to_flots.setdefault(town, []).append(flot)
+
+    return base_to_flots, town_to_flots
