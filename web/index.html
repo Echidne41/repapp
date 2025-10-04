@@ -18,16 +18,26 @@
 
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
 
-    <!-- Multi-select filters -->
+    <!-- Issues selector (dropdown) -->
     <div class="mt-4">
-      <div class="flex items-center justify-between">
-        <label class="text-sm font-medium">Show issues:</label>
-        <div class="flex gap-2">
-          <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
-          <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
+      <details id="issueDropdown" class="group rounded-lg border bg-white">
+        <summary class="flex items-center justify-between px-3 py-2 cursor-pointer select-none">
+          <span class="text-sm font-medium">Choose issues</span>
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform group-open:rotate-180" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.08 1.04l-4.25 4.25a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
+          </svg>
+        </summary>
+        <div class="px-3 pb-3">
+          <div class="flex items-center justify-between">
+            <span class="text-sm text-slate-600">Show issues:</span>
+            <div class="flex gap-2">
+              <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
+              <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
+            </div>
+          </div>
+          <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
         </div>
-      </div>
-      <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+      </details>
     </div>
 
     <div id="results" class="mt-4 grid gap-4"></div>
@@ -40,6 +50,7 @@
       : '';
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
+    const STANCE_ICONS  = { support: "👍", oppose: "👎", no_vote: "❓" };
 
     // Front-end sanitizer for Pandas/CSV "NaN" and real NaN
     function clean(v) {
@@ -50,6 +61,13 @@
         return s.toLowerCase() === "nan" ? "" : s;
       }
       return v;
+    }
+
+    // Robust label fallback for occasionally-bad issue rows
+    function labelFor(issue, fallbackSlug) {
+      const lbl = clean(issue?.label) || clean(issue?.name) || clean(issue?.title);
+      const slug = clean(fallbackSlug ?? issue?.slug);
+      return lbl || slug || "Unnamed issue";
     }
 
     const addrEl = document.getElementById("addr");
@@ -98,7 +116,6 @@
     }
 
     function renderChecklist(issues) {
-      // Build "All" first
       const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
       items.forEach((it, idx) => {
@@ -107,7 +124,7 @@
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
-        const labelTxt = clean(it.label) || it.slug;
+        const labelTxt = labelFor(it, it.slug);
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
           <span class="text-sm">${labelTxt}</span>
@@ -115,14 +132,12 @@
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
           if (it.slug === "ALL") {
-            // Toggling ALL overrides everything else
             if (cb.checked) {
               SELECTED = new Set(["ALL"]);
             } else {
               SELECTED = new Set(); // none selected
             }
           } else {
-            // Selecting any specific issue clears ALL
             if (cb.checked) {
               SELECTED.delete("ALL");
               SELECTED.add(it.slug);
@@ -131,7 +146,7 @@
               if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
             }
           }
-          renderChecklist(issues);       // refresh checked states
+          renderChecklist(issues);
           renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
@@ -145,11 +160,9 @@
         return;
       }
 
-      // Build a quick lookup for issue metadata
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      // Decide which slugs to show
       const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
@@ -179,7 +192,7 @@
                     : stance === "oppose"  ? "bg-red-500"
                     : "bg-yellow-400";
 
-          const label   = clean(issue.label) || slug;
+          const label   = labelFor(issue, slug);
           const billTxt = clean(issue.bill);
           const billUrl = clean(issue.bill_url);
           const hasLink = !!billUrl;
@@ -200,7 +213,10 @@
                 ${billHtml}
               </div>
             </div>
-            <div class="text-xs text-slate-500">${STANCE_LABELS[stance]}</div>`;
+            <div class="flex items-center gap-1 text-xs text-slate-600" title="${STANCE_LABELS[stance]}" aria-label="${STANCE_LABELS[stance]}">
+              <span>${STANCE_ICONS[stance] || "❓"}</span>
+              <span>${STANCE_LABELS[stance]}</span>
+            </div>`;
           grid.appendChild(row);
         }
 
