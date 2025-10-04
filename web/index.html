@@ -34,20 +34,13 @@
   </div>
 
   <script>
-    // API: Vercel => talk to Render; local Flask => same-origin
+    // If hosted on Vercel, talk to the Render backend; otherwise same-origin.
     const API = location.hostname.endsWith('vercel.app')
       ? 'https://repapp-9lq6.onrender.com'
       : '';
 
-    // helpers
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
-    const clean = (v) => {
-      const t = (v ?? "").toString().trim();
-      return t.toLowerCase() === "nan" ? "" : t;
-    };
-    const isHttpUrl = (s) => /^https?:\/\//i.test((s || "").trim());
 
-    // DOM
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -58,12 +51,23 @@
 
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    let SELECTED = new Set(["ALL"]); // special token
+    // Default = empty selection (user must choose issues)
+    let SELECTED = new Set();
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
-    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
-    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+    selectAllBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set(["ALL"]);
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+    });
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set();
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+    });
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
@@ -81,24 +85,15 @@
         }
         const data = await r.json();
 
-        LAST_ISSUES = (data.issues || []).map(it => ({
-          ...it,
-          label: clean(it.label),
-          bill: clean(it.bill),
-          bill_url: clean(it.bill_url)
-        }));
-        LAST_REPS = (data.reps || []).filter(rep => {
-          // hide junk rows that somehow slipped through
-          const name = clean(rep.name), dist = clean(rep.district);
-          return !!(name || dist);
-        });
+        LAST_ISSUES = data.issues || [];
+        LAST_REPS = data.reps || [];
 
-        if (SELECTED.size === 0) SELECTED = new Set(["ALL"]);
+        // Do NOT auto-select anything; user chooses
         renderChecklist(LAST_ISSUES);
 
-        const base = clean(data.base_district || data.base_code || "?");
-        const flots = (data.floterials || []).join(", ");
-        statusEl.textContent = `Base: ${base}${flots ? " · Floterials: " + flots : ""}`;
+        statusEl.textContent =
+          `Base: ${data.base_district || data.base_code || "?"}` +
+          (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
 
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch (e) {
@@ -117,7 +112,7 @@
         row.htmlFor = id;
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
-          <span class="text-sm">${clean(it.label || it.slug)}</span>
+          <span class="text-sm">${it.label || it.slug}</span>
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
@@ -129,7 +124,7 @@
               SELECTED.add(it.slug);
             } else {
               SELECTED.delete(it.slug);
-              if (SELECTED.size === 0) SELECTED.add("ALL");
+              // If user clears the last one, leave it empty (do not re-select ALL)
             }
           }
           renderChecklist(issues);
@@ -146,18 +141,14 @@
         return;
       }
 
-      // lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
+      // New: empty set means show none; "ALL" means show everything
+      const showAll = selectedSet.has("ALL");
       const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
-        const name = clean(rep.name);
-        const party = clean(rep.party);
-        const district = clean(rep.district);
-
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
@@ -165,14 +156,15 @@
         header.className = "flex items-baseline justify-between";
         header.innerHTML = `
           <div>
-            <div class="text-lg font-semibold">${name || "Unknown rep"}</div>
-            <div class="text-sm text-slate-600">${[party, district].filter(Boolean).join(" · ")}</div>
+            <div class="text-lg font-semibold">${rep.name}</div>
+            <div class="text-sm text-slate-600">${rep.party} · ${rep.district}</div>
           </div>`;
         card.appendChild(header);
 
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
 
+        // If no issues selected, render nothing (user must choose)
         for (const slug of shownSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
@@ -182,12 +174,11 @@
                     : stance === "oppose"  ? "bg-red-500"
                     : "bg-yellow-400";
 
-          const billTxt = clean(issue.bill);
-          const url = clean(issue.bill_url);
-          const billHtml = billTxt
-            ? (isHttpUrl(url)
-                ? `<a class="text-xs text-indigo-700 underline" href="${url}" target="_blank" rel="noopener">${billTxt}</a>`
-                : `<span class="text-xs text-slate-600">${billTxt}</span>`)
+          const hasLink = (issue.bill_url || "").trim().startsWith("http");
+          const billHtml = issue.bill
+            ? (hasLink
+                ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
+                : `<span class="text-xs text-slate-600">${issue.bill}</span>`)
             : "";
 
           const row = document.createElement("div");
@@ -196,7 +187,7 @@
             <div class="flex items-center gap-2">
               <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
-                <span class="text-sm font-medium">${clean(issue.label || slug)}</span>
+                <span class="text-sm font-medium">${issue.label || slug}</span>
                 ${billHtml}
               </div>
             </div>
