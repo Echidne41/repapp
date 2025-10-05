@@ -19,7 +19,7 @@
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
     <div id="summary" class="mt-2 text-xs text-slate-600"></div>
 
-    <!-- Issues selector (dropdown on first screen) -->
+    <!-- Issues selector (dropdown) -->
     <div class="mt-4">
       <details id="issueDropdown" class="group rounded-lg border bg-white">
         <summary class="flex items-center justify-between px-3 py-2 cursor-pointer select-none">
@@ -53,11 +53,10 @@
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
     const STANCE_ICONS  = { support: "👍", oppose: "👎", no_vote: "❓" };
 
-    // How many issues per rep to show before "Show all"
-    const MAX_ISSUES = 8;
-    const EXPANDED = new Set(); // per-rep expansion state
+    const MAX_ISSUES = 8;             // visible per rep before "Show all"
+    const EXPANDED = new Set();       // per-rep expansion state
 
-    // Sanitize Pandas/CSV NaN and blankish values
+    // Clean helpers
     function clean(v) {
       if (v == null) return "";
       if (typeof v === "number" && Number.isNaN(v)) return "";
@@ -67,22 +66,24 @@
       }
       return v;
     }
-
-    // Robust label: label → name → title → slug → "Unnamed issue"
     function labelFor(issue, fallbackSlug) {
       const lbl = clean(issue?.label) || clean(issue?.name) || clean(issue?.title);
       const slug = clean(fallbackSlug ?? issue?.slug);
       return lbl || slug || "Unnamed issue";
     }
+    // Treat any issue with empty/NaN slug as "blank" and drop it
+    function isRealIssue(it) {
+      return !!clean(it?.slug);
+    }
 
     function updateSummary(selectedSet, issues) {
       const el = document.getElementById("summary");
       if (!el) return;
-      const all = selectedSet.has("ALL") || selectedSet.size === 0;
-      const n = all ? issues.length : selectedSet.size;
-      el.textContent = all
-        ? (issues.length ? "Showing: All issues" : "")
-        : `Showing: ${n} issue${n > 1 ? "s" : ""}`;
+      if (!issues.length) { el.textContent = ""; return; }
+      const allSelected = selectedSet.size === 0 || selectedSet.size === issues.length;
+      el.textContent = allSelected
+        ? "Showing: All issues"
+        : `Showing: ${selectedSet.size} issue${selectedSet.size > 1 ? "s" : ""}`;
     }
 
     const addrEl = document.getElementById("addr");
@@ -95,11 +96,9 @@
 
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    // Selected issue slugs. Special token "ALL" means show everything.
-    // Default: none checked; results treat that as "show all".
+    // Selected issue slugs. Empty Set === show all.
     let SELECTED = new Set();
 
-    // Preload issues so the selector is available on first screen
     document.addEventListener("DOMContentLoaded", preloadIssues);
 
     async function preloadIssues() {
@@ -107,7 +106,7 @@
         const r = await fetch(`${API}/issues`);
         if (r.ok) {
           const data = await r.json();
-          LAST_ISSUES = data.issues || [];
+          LAST_ISSUES = (data.issues || []).filter(isRealIssue); // drop blanks
           renderChecklist(LAST_ISSUES);
           updateSummary(SELECTED, LAST_ISSUES);
         }
@@ -117,9 +116,10 @@
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
 
+    // Select all: checks every *real* issue
     selectAllBtn.addEventListener("click", (e) => {
       e.preventDefault();
-      SELECTED = new Set(["ALL"]);
+      SELECTED = new Set(LAST_ISSUES.map(i => i.slug)); // only real issues
       renderChecklist(LAST_ISSUES);
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       updateSummary(SELECTED, LAST_ISSUES);
@@ -127,7 +127,7 @@
 
     clearBtn.addEventListener("click", (e) => {
       e.preventDefault();
-      SELECTED = new Set();
+      SELECTED = new Set(); // none selected => show all
       renderChecklist(LAST_ISSUES);
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       updateSummary(SELECTED, LAST_ISSUES);
@@ -143,7 +143,7 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
 
-        LAST_ISSUES = data.issues || [];
+        LAST_ISSUES = (data.issues || []).filter(isRealIssue); // drop blanks
         LAST_REPS   = data.reps || [];
 
         renderChecklist(LAST_ISSUES);
@@ -153,7 +153,6 @@
           `Base: ${data.base_district || data.base_code || "?"}` +
           (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
 
-        // Reset expansion per new lookup
         EXPANDED.clear();
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch (e) {
@@ -162,11 +161,10 @@
     }
 
     function renderChecklist(issues) {
-      const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
-      items.forEach((it, idx) => {
+      issues.forEach((it, idx) => {
         const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
+        const checked = SELECTED.size > 0 && SELECTED.has(it.slug);
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
@@ -177,16 +175,10 @@
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (it.slug === "ALL") {
-            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
+          if (cb.checked) {
+            SELECTED.add(it.slug);
           } else {
-            if (cb.checked) {
-              SELECTED.delete("ALL");
-              SELECTED.add(it.slug);
-            } else {
-              SELECTED.delete(it.slug);
-              if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
-            }
+            SELECTED.delete(it.slug);
           }
           renderChecklist(issues);                 // refresh checked states
           renderReps(LAST_REPS, issues, SELECTED); // re-render cards
@@ -203,13 +195,14 @@
         return;
       }
 
-      // Build quick issue lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      // Decide which slugs to show
-      const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
-      const allSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
+      const validSlugs = issues.map(i => i.slug);
+      const showAll = selectedSet.size === 0;
+      const allSlugs = showAll
+        ? validSlugs
+        : [...selectedSet].filter(s => validSlugs.includes(s));
 
       for (const rep of reps) {
         const card = document.createElement("div");
@@ -252,6 +245,11 @@
                 : `<span class="text-xs text-slate-600">${billTxt}</span>`)
             : "";
 
+          const iconColor =
+            stance === "support" ? "text-green-600"
+          : stance === "oppose"  ? "text-red-600"
+          : "";
+
           const row = document.createElement("div");
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
@@ -263,7 +261,7 @@
               </div>
             </div>
             <div class="flex items-center gap-1 text-xs text-slate-600" title="${STANCE_LABELS[stance]}" aria-label="${STANCE_LABELS[stance]}">
-              <span>${STANCE_ICONS[stance] || "❓"}</span>
+              <span class="${iconColor}">${STANCE_ICONS[stance] || "❓"}</span>
               <span>${STANCE_LABELS[stance]}</span>
             </div>`;
           grid.appendChild(row);
