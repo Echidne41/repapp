@@ -193,11 +193,20 @@ def _geocode_osm_nominatim(q: str, city: Optional[str], zip5: Optional[str]):
             return None, None, ""
         j = arr[0]
         lat = float(j.get("lat")); lon = float(j.get("lon"))
-        # Best-effort town from display_name; uppercase to match TOWN_TO_FLOTS keys
-        disp = (j.get("display_name") or "")
-        town = ""
-        m = re.search(r",\s*([^,]+?),\s*New Hampshire\b", disp)
-        if m: town = m.group(1).upper().strip()
+
+        # Prefer structured address fields (city/town/...) over display_name
+        addrj = j.get("address") or {}
+        town = (addrj.get("city") or addrj.get("town") or addrj.get("village") or
+                addrj.get("hamlet") or addrj.get("municipality") or addrj.get("county") or "").upper().strip()
+        if town in {"WEST LEBANON", "W LEBANON"}:
+            town = "LEBANON"
+
+        # Fallback to display_name only if needed
+        if not town:
+            disp = (j.get("display_name") or "")
+            m = re.search(r",\s*([^,]+?),\s*New Hampshire\b", disp)
+            if m: town = m.group(1).upper().strip()
+
         return lat, lon, town
     except Exception:
         return None, None, ""
