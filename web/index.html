@@ -53,8 +53,12 @@
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
     const STANCE_ICONS  = { support: "👍", oppose: "👎", no_vote: "❓" };
 
-    const MAX_ISSUES = 8;             // visible per rep before "Show all"
-    const EXPANDED = new Set();       // per-rep expansion state
+    // How many issues per rep to show before "Show all"
+    const MAX_ISSUES = 8;
+    const EXPANDED = new Set(); // per-rep expansion state
+
+    // GitHub CSV (fallback link target to exact row)
+    const ISSUES_CSV_BASE = "https://github.com/Echidne41/repapp/blob/main/backend/data/issues.csv?plain=1#L";
 
     // Clean helpers
     function clean(v) {
@@ -71,7 +75,6 @@
       const slug = clean(fallbackSlug ?? issue?.slug);
       return lbl || slug || "Unnamed issue";
     }
-    // Treat any issue with empty/NaN slug as "blank" and drop it
     function isRealIssue(it) {
       return !!clean(it?.slug);
     }
@@ -94,6 +97,8 @@
     const selectAllBtn = document.getElementById("selectAllBtn");
     const clearBtn = document.getElementById("clearBtn");
 
+    // Keep both raw (for line numbers) and filtered (for UI)
+    let RAW_ISSUES = [];
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     // Selected issue slugs. Empty Set === show all.
@@ -106,7 +111,8 @@
         const r = await fetch(`${API}/issues`);
         if (r.ok) {
           const data = await r.json();
-          LAST_ISSUES = (data.issues || []).filter(isRealIssue); // drop blanks
+          RAW_ISSUES  = data.issues || [];
+          LAST_ISSUES = RAW_ISSUES.filter(isRealIssue);
           renderChecklist(LAST_ISSUES);
           updateSummary(SELECTED, LAST_ISSUES);
         }
@@ -143,7 +149,8 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const data = await r.json();
 
-        LAST_ISSUES = (data.issues || []).filter(isRealIssue); // drop blanks
+        RAW_ISSUES  = data.issues || [];
+        LAST_ISSUES = RAW_ISSUES.filter(isRealIssue);
         LAST_REPS   = data.reps || [];
 
         renderChecklist(LAST_ISSUES);
@@ -195,14 +202,16 @@
         return;
       }
 
+      // Build quick lookups
       const issueBySlug = {};
+      const idxInRawBySlug = {};
+      RAW_ISSUES.forEach((it, i) => { const s = clean(it.slug); if (s) idxInRawBySlug[s] = i; });
       issues.forEach(i => issueBySlug[i.slug] = i);
 
+      // Decide which slugs to show
       const validSlugs = issues.map(i => i.slug);
       const showAll = selectedSet.size === 0;
-      const allSlugs = showAll
-        ? validSlugs
-        : [...selectedSet].filter(s => validSlugs.includes(s));
+      const allSlugs = showAll ? validSlugs : [...selectedSet].filter(s => validSlugs.includes(s));
 
       for (const rep of reps) {
         const card = document.createElement("div");
@@ -230,21 +239,26 @@
 
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
           const stance = v.stance;
-          const dot = stance === "support" ? "bg-green-500"
-                    : stance === "oppose"  ? "bg-red-500"
-                    : "bg-yellow-400";
 
           const label   = labelFor(issue, slug);
           const billTxt = clean(issue.bill);
           const billUrl = clean(issue.bill_url);
-          const hasLink = !!billUrl;
+
+          // Fallback link: point to exact CSV row for this issue
+          const rawIdx  = idxInRawBySlug[slug];
+          const csvRowL = typeof rawIdx === "number" ? (2 + rawIdx) : null; // header=1, first data row=2
+          const fallbackLink = csvRowL ? `${ISSUES_CSV_BASE}${csvRowL}` : "";
+
+          const link = billUrl || fallbackLink;
+          const hasLink = !!link;
 
           const billHtml = billTxt
             ? (hasLink
-                ? `<a class="text-xs text-indigo-700 underline" href="${billUrl}" target="_blank" rel="noopener">${billTxt}</a>`
+                ? `<a class="text-xs underline" href="${link}" target="_blank" rel="noopener">${billTxt}</a>`
                 : `<span class="text-xs text-slate-600">${billTxt}</span>`)
             : "";
 
+          // Color thumbs: green for support, red for oppose, default for no_vote
           const iconColor =
             stance === "support" ? "text-green-600"
           : stance === "oppose"  ? "text-red-600"
@@ -254,7 +268,6 @@
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
-              <span class="inline-block w-2.5 h-2.5 rounded-full ${dot}"></span>
               <div class="flex flex-col">
                 <span class="text-sm font-medium">${label}</span>
                 ${billHtml}
