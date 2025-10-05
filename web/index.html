@@ -17,12 +17,13 @@
     </div>
 
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
+    <div id="summary" class="mt-2 text-xs text-slate-600"></div>
 
     <!-- Issues selector (dropdown on first screen) -->
     <div class="mt-4">
       <details id="issueDropdown" class="group rounded-lg border bg-white">
         <summary class="flex items-center justify-between px-3 py-2 cursor-pointer select-none">
-          <span class="text-sm font-medium">Choose issues</span>
+          <span class="text-sm font-medium">Choose issues (optional)</span>
           <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform group-open:rotate-180" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.08 1.04l-4.25 4.25a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
           </svg>
@@ -52,7 +53,11 @@
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
     const STANCE_ICONS  = { support: "👍", oppose: "👎", no_vote: "❓" };
 
-    // Front-end sanitizer for Pandas/CSV "NaN" and real NaN
+    // How many issues per rep to show before "Show all"
+    const MAX_ISSUES = 8;
+    const EXPANDED = new Set(); // per-rep expansion state
+
+    // Sanitize Pandas/CSV NaN and blankish values
     function clean(v) {
       if (v == null) return "";
       if (typeof v === "number" && Number.isNaN(v)) return "";
@@ -63,11 +68,21 @@
       return v;
     }
 
-    // Robust label fallback for occasionally-bad issue rows
+    // Robust label: label → name → title → slug → "Unnamed issue"
     function labelFor(issue, fallbackSlug) {
       const lbl = clean(issue?.label) || clean(issue?.name) || clean(issue?.title);
       const slug = clean(fallbackSlug ?? issue?.slug);
       return lbl || slug || "Unnamed issue";
+    }
+
+    function updateSummary(selectedSet, issues) {
+      const el = document.getElementById("summary");
+      if (!el) return;
+      const all = selectedSet.has("ALL") || selectedSet.size === 0;
+      const n = all ? issues.length : selectedSet.size;
+      el.textContent = all
+        ? (issues.length ? "Showing: All issues" : "")
+        : `Showing: ${n} issue${n > 1 ? "s" : ""}`;
     }
 
     const addrEl = document.getElementById("addr");
@@ -81,7 +96,7 @@
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     // Selected issue slugs. Special token "ALL" means show everything.
-    // Default: none checked on first render.
+    // Default: none checked; results treat that as "show all".
     let SELECTED = new Set();
 
     // Preload issues so the selector is available on first screen
@@ -94,14 +109,29 @@
           const data = await r.json();
           LAST_ISSUES = data.issues || [];
           renderChecklist(LAST_ISSUES);
+          updateSummary(SELECTED, LAST_ISSUES);
         }
       } catch (_) { /* non-fatal */ }
     }
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
-    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
-    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+
+    selectAllBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set(["ALL"]);
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+      updateSummary(SELECTED, LAST_ISSUES);
+    });
+
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set();
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+      updateSummary(SELECTED, LAST_ISSUES);
+    });
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
@@ -114,15 +144,17 @@
         const data = await r.json();
 
         LAST_ISSUES = data.issues || [];
-        LAST_REPS = data.reps || [];
+        LAST_REPS   = data.reps || [];
 
-        // Keep current selection; default is none checked.
         renderChecklist(LAST_ISSUES);
+        updateSummary(SELECTED, LAST_ISSUES);
 
         statusEl.textContent =
           `Base: ${data.base_district || data.base_code || "?"}` +
           (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
 
+        // Reset expansion per new lookup
+        EXPANDED.clear();
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch (e) {
         statusEl.textContent = "Error contacting server.";
@@ -146,11 +178,7 @@
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
           if (it.slug === "ALL") {
-            if (cb.checked) {
-              SELECTED = new Set(["ALL"]);
-            } else {
-              SELECTED = new Set(); // none selected
-            }
+            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
           } else {
             if (cb.checked) {
               SELECTED.delete("ALL");
@@ -160,8 +188,9 @@
               if (SELECTED.size === 0) SELECTED.add("ALL"); // fall back to all
             }
           }
-          renderChecklist(issues);
-          renderReps(LAST_REPS, issues, SELECTED);
+          renderChecklist(issues);                 // refresh checked states
+          renderReps(LAST_REPS, issues, SELECTED); // re-render cards
+          updateSummary(SELECTED, issues);         // refresh summary
         });
         listEl.appendChild(row);
       });
@@ -174,11 +203,13 @@
         return;
       }
 
+      // Build quick issue lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
+      // Decide which slugs to show
       const showAll = selectedSet.has("ALL") || selectedSet.size === 0;
-      const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
+      const allSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
         const card = document.createElement("div");
@@ -196,7 +227,11 @@
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
 
-        for (const slug of shownSlugs) {
+        const repKey = `${rep.name}·${rep.district}`;
+        const expanded = EXPANDED.has(repKey);
+        const visibleSlugs = expanded ? allSlugs : allSlugs.slice(0, MAX_ISSUES);
+
+        for (const slug of visibleSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
 
@@ -235,6 +270,18 @@
         }
 
         card.appendChild(grid);
+
+        if (allSlugs.length > MAX_ISSUES) {
+          const btn = document.createElement("button");
+          btn.className = "mt-2 text-xs underline text-indigo-700";
+          btn.textContent = expanded ? "Hide extra issues" : `Show all ${allSlugs.length}`;
+          btn.addEventListener("click", () => {
+            if (expanded) EXPANDED.delete(repKey); else EXPANDED.add(repKey);
+            renderReps(reps, issues, selectedSet);
+          });
+          card.appendChild(btn);
+        }
+
         resultsEl.appendChild(card);
       }
     }
