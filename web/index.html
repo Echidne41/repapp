@@ -70,22 +70,17 @@
 
     const stanceIcon = (stance) => {
       if (stance === "support") {
-        return `
-          <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="currentColor" aria-label="Supports">
-            <path d="M2 10h4v12H2V10zm7 12h7a3 3 0 003-3v-7a2 2 0 00-2-2h-5.3l.86-3.47a2 2 0 00-1.95-2.53H10a2 2 0 00-2 2v.8L6 10v12h3z"/>
-          </svg>`;
-      }
+      return `<span class="text-base" aria-label="Supports">✅</span>`;
+   }
       if (stance === "oppose") {
-        return `
-          <svg class="w-4 h-4 text-red-600" viewBox="0 0 24 24" fill="currentColor" aria-label="Opposes">
-            <path d="M2 2h4v12H2V2zm7-0h7a3 3 0 013 3v7a2 2 0 01-2 2h-5.3l.86 3.47a2 2 0 01-1.95 2.53H10a2 2 0 01-2-2v-.8L6 14V2h3z" transform="scale(1,-1) translate(0,-24)"/>
-          </svg>`;
-      }
-      return `
-        <svg class="w-4 h-4 text-gray-500" viewBox="0 0 24 24" fill="currentColor" aria-label="No vote">
-          <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm1.9-7.1c-.3.5-.8.8-1.3 1.1-.6.3-1 .6-1 .9v1h-2v-1c0-1.3 1-2 1.7-2.4.5-.3.8-.5.9-.8.2-.5-.2-1.1-.9-1.1-.7 0-1.1.4-1.3 1l-1.8-.8C8.8 6 10 5 12 5c1.9 0 3.2 1.2 3.2 2.7 0 .7-.2 1.4-.3 1.2z"/>
-        </svg>`;
-    };
+      return `<span class="text-base" aria-label="Opposes">❌</span>`;
+   }
+  return `
+    <svg class="w-4 h-4 text-gray-500" viewBox="0 0 24 24" fill="currentColor" aria-label="No vote">
+      <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm1.9-7.1c-.3.5-.8.8-1.3 1.1-.6.3-1 .6-1 .9v1h-2v-1c0-1.3 1-2 1.7-2.4.5-.3.8-.5.9-.8.2-.5-.2-1.1-.9-1.1-.7 0-1.1.4-1.3 1l-1.8-.8C8.8 6 10 5 12 5c1.9 0 3.2 1.2 3.2 2.7 0 .7-.2 1.4-.3 1.2z"/>
+    </svg>`;
+};
+
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
