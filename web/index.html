@@ -17,78 +17,31 @@
     </div>
 
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
-    <div id="summary" class="mt-2 text-xs text-slate-600"></div>
 
-    <!-- Issues selector (dropdown) -->
+    <!-- Multi-select filters (default: EMPTY) -->
     <div class="mt-4">
-      <details id="issueDropdown" class="group rounded-lg border bg-white">
-        <summary class="flex items-center justify-between px-3 py-2 cursor-pointer select-none">
-          <span class="text-sm font-medium">Choose issues (optional)</span>
-          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 transition-transform group-open:rotate-180" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 011.06.02L10 10.94l3.71-3.71a.75.75 0 111.08 1.04l-4.25 4.25a.75.75 0 01-1.08 0L5.21 8.27a.75.75 0 01.02-1.06z" clip-rule="evenodd"/>
-          </svg>
-        </summary>
-        <div class="px-3 pb-3">
-          <div class="flex items-center justify-between">
-            <span class="text-sm text-slate-600">Show issues:</span>
-            <div class="flex gap-2">
-              <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
-              <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
-            </div>
-          </div>
-          <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
+      <div class="flex items-center justify-between">
+        <label class="text-sm font-medium">Show issues:</label>
+        <div class="flex gap-2">
+          <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
+          <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
         </div>
-      </details>
+      </div>
+      <div id="issueChecklist" class="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2"></div>
     </div>
 
     <div id="results" class="mt-4 grid gap-4"></div>
   </div>
 
   <script>
-    // If hosted on Vercel, talk to the Render backend; otherwise same-origin.
+    // Vercel -> Render API; local Flask -> same-origin
     const API = location.hostname.endsWith('vercel.app')
       ? 'https://repapp-9lq6.onrender.com'
       : '';
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
-    const STANCE_ICONS  = { support: "👍", oppose: "👎", no_vote: "❓" };
 
-    // How many issues per rep to show before "Show all"
-    const MAX_ISSUES = 8;
-    const EXPANDED = new Set(); // per-rep expansion state
-
-    // GitHub CSV (fallback link target to exact row)
-    const ISSUES_CSV_BASE = "https://github.com/Echidne41/repapp/blob/main/backend/data/issues.csv?plain=1#L";
-
-    // Clean helpers
-    function clean(v) {
-      if (v == null) return "";
-      if (typeof v === "number" && Number.isNaN(v)) return "";
-      if (typeof v === "string") {
-        const s = v.trim();
-        return s.toLowerCase() === "nan" ? "" : s;
-      }
-      return v;
-    }
-    function labelFor(issue, fallbackSlug) {
-      const lbl = clean(issue?.label) || clean(issue?.name) || clean(issue?.title);
-      const slug = clean(fallbackSlug ?? issue?.slug);
-      return lbl || slug || "Unnamed issue";
-    }
-    function isRealIssue(it) {
-      return !!clean(it?.slug);
-    }
-
-    function updateSummary(selectedSet, issues) {
-      const el = document.getElementById("summary");
-      if (!el) return;
-      if (!issues.length) { el.textContent = ""; return; }
-      const allSelected = selectedSet.size === 0 || selectedSet.size === issues.length;
-      el.textContent = allSelected
-        ? "Showing: All issues"
-        : `Showing: ${selectedSet.size} issue${selectedSet.size > 1 ? "s" : ""}`;
-    }
-
+    // DOM
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -97,47 +50,42 @@
     const selectAllBtn = document.getElementById("selectAllBtn");
     const clearBtn = document.getElementById("clearBtn");
 
-    // Keep both raw (for line numbers) and filtered (for UI)
-    let RAW_ISSUES = [];
     let LAST_ISSUES = [];
     let LAST_REPS = [];
-    // Selected issue slugs. Empty Set === show all.
+    // Default: empty selection (user chooses)
     let SELECTED = new Set();
-
-    document.addEventListener("DOMContentLoaded", preloadIssues);
-
-    async function preloadIssues() {
-      try {
-        const r = await fetch(`${API}/issues`);
-        if (r.ok) {
-          const data = await r.json();
-          RAW_ISSUES  = data.issues || [];
-          LAST_ISSUES = RAW_ISSUES.filter(isRealIssue);
-          renderChecklist(LAST_ISSUES);
-          updateSummary(SELECTED, LAST_ISSUES);
-        }
-      } catch (_) { /* non-fatal */ }
-    }
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
+    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
+    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
 
-    // Select all: checks every *real* issue
-    selectAllBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      SELECTED = new Set(LAST_ISSUES.map(i => i.slug)); // only real issues
-      renderChecklist(LAST_ISSUES);
-      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
-      updateSummary(SELECTED, LAST_ISSUES);
-    });
+    // --- small helpers ---
+    const partyBadge = (party) => {
+      const p = (party || "").toLowerCase();
+      if (p.startsWith("d")) return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">D</span>`;
+      if (p.startsWith("r")) return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-pink-100 text-pink-800 border border-pink-200">R</span>`;
+      return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">I</span>`;
+    };
 
-    clearBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      SELECTED = new Set(); // none selected => show all
-      renderChecklist(LAST_ISSUES);
-      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
-      updateSummary(SELECTED, LAST_ISSUES);
-    });
+    const stanceIcon = (stance) => {
+      if (stance === "support") {
+        return `
+          <svg class="w-4 h-4 text-green-600" viewBox="0 0 24 24" fill="currentColor" aria-label="Supports">
+            <path d="M2 10h4v12H2V10zm7 12h7a3 3 0 003-3v-7a2 2 0 00-2-2h-5.3l.86-3.47a2 2 0 00-1.95-2.53H10a2 2 0 00-2 2v.8L6 10v12h3z"/>
+          </svg>`;
+      }
+      if (stance === "oppose") {
+        return `
+          <svg class="w-4 h-4 text-red-600" viewBox="0 0 24 24" fill="currentColor" aria-label="Opposes">
+            <path d="M2 2h4v12H2V2zm7-0h7a3 3 0 013 3v7a2 2 0 01-2 2h-5.3l.86 3.47a2 2 0 01-1.95 2.53H10a2 2 0 01-2-2v-.8L6 14V2h3z" transform="scale(1,-1) translate(0,-24)"/>
+          </svg>`;
+      }
+      return `
+        <svg class="w-4 h-4 text-gray-500" viewBox="0 0 24 24" fill="currentColor" aria-label="No vote">
+          <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm1.9-7.1c-.3.5-.8.8-1.3 1.1-.6.3-1 .6-1 .9v1h-2v-1c0-1.3 1-2 1.7-2.4.5-.3.8-.5.9-.8.2-.5-.2-1.1-.9-1.1-.7 0-1.1.4-1.3 1l-1.8-.8C8.8 6 10 5 12 5c1.9 0 3.2 1.2 3.2 2.7 0 .7-.2 1.4-.3 1.2z"/>
+        </svg>`;
+    };
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
@@ -146,21 +94,25 @@
       statusEl.textContent = "Looking up…";
       try {
         const r = await fetch(`${API}/lookup?address=${encodeURIComponent(a)}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        if (!r.ok) {
+          if (r.status === 422) {
+            statusEl.textContent = "Couldn’t find that address. Try a simpler format (e.g., '95 Alta Blvd, Lebanon, NH').";
+            return;
+          }
+          throw new Error(`HTTP ${r.status}`);
+        }
         const data = await r.json();
 
-        RAW_ISSUES  = data.issues || [];
-        LAST_ISSUES = RAW_ISSUES.filter(isRealIssue);
-        LAST_REPS   = data.reps || [];
+        LAST_ISSUES = data.issues || [];
+        LAST_REPS = data.reps || [];
+
+        // Show ONLY district strings, no labels
+        const districts = []
+        if (data.base_district || data.base_code) districts.push(data.base_district || data.base_code);
+        if (Array.isArray(data.floterials)) districts.push(...data.floterials);
+        statusEl.textContent = districts.filter(Boolean).join(" · ");
 
         renderChecklist(LAST_ISSUES);
-        updateSummary(SELECTED, LAST_ISSUES);
-
-        statusEl.textContent =
-          `Base: ${data.base_district || data.base_code || "?"}` +
-          (data.floterials?.length ? ` · Floterials: ${data.floterials.join(", ")}` : "");
-
-        EXPANDED.clear();
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch (e) {
         statusEl.textContent = "Error contacting server.";
@@ -168,28 +120,28 @@
     }
 
     function renderChecklist(issues) {
+      const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
-      issues.forEach((it, idx) => {
+      items.forEach((it, idx) => {
         const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.size > 0 && SELECTED.has(it.slug);
+        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
-        const labelTxt = labelFor(it, it.slug);
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
-          <span class="text-sm">${labelTxt}</span>
+          <span class="text-sm">${it.label || it.slug}</span>
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (cb.checked) {
-            SELECTED.add(it.slug);
+          if (it.slug === "ALL") {
+            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
           } else {
-            SELECTED.delete(it.slug);
+            if (cb.checked) { SELECTED.delete("ALL"); SELECTED.add(it.slug); }
+            else { SELECTED.delete(it.slug); }
           }
-          renderChecklist(issues);                 // refresh checked states
-          renderReps(LAST_REPS, issues, SELECTED); // re-render cards
-          updateSummary(SELECTED, issues);         // refresh summary
+          renderChecklist(issues);
+          renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
       });
@@ -202,97 +154,58 @@
         return;
       }
 
-      // Build quick lookups
       const issueBySlug = {};
-      const idxInRawBySlug = {};
-      RAW_ISSUES.forEach((it, i) => { const s = clean(it.slug); if (s) idxInRawBySlug[s] = i; });
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      // Decide which slugs to show
-      const validSlugs = issues.map(i => i.slug);
-      const showAll = selectedSet.size === 0;
-      const allSlugs = showAll ? validSlugs : [...selectedSet].filter(s => validSlugs.includes(s));
+      const showAll = selectedSet.has("ALL");
+      const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
 
       for (const rep of reps) {
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
+        // Header with party badge colors
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
+        const party = rep.party || "";
         header.innerHTML = `
-          <div>
+          <div class="flex items-center">
             <div class="text-lg font-semibold">${rep.name}</div>
-            <div class="text-sm text-slate-600">${rep.party} · ${rep.district}</div>
-          </div>`;
+            ${partyBadge(party)}
+          </div>
+          <div class="text-sm text-slate-600">${rep.district || ""}</div>
+        `;
         card.appendChild(header);
 
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
 
-        const repKey = `${rep.name}·${rep.district}`;
-        const expanded = EXPANDED.has(repKey);
-        const visibleSlugs = expanded ? allSlugs : allSlugs.slice(0, MAX_ISSUES);
-
-        for (const slug of visibleSlugs) {
+        for (const slug of shownSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
-
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
-          const stance = v.stance;
-
-          const label   = labelFor(issue, slug);
-          const billTxt = clean(issue.bill);
-          const billUrl = clean(issue.bill_url);
-
-          // Fallback link: point to exact CSV row for this issue
-          const rawIdx  = idxInRawBySlug[slug];
-          const csvRowL = typeof rawIdx === "number" ? (2 + rawIdx) : null; // header=1, first data row=2
-          const fallbackLink = csvRowL ? `${ISSUES_CSV_BASE}${csvRowL}` : "";
-
-          const link = billUrl || fallbackLink;
-          const hasLink = !!link;
-
-          const billHtml = billTxt
-            ? (hasLink
-                ? `<a class="text-xs underline" href="${link}" target="_blank" rel="noopener">${billTxt}</a>`
-                : `<span class="text-xs text-slate-600">${billTxt}</span>`)
-            : "";
-
-          // Color thumbs: green for support, red for oppose, default for no_vote
-          const iconColor =
-            stance === "support" ? "text-green-600"
-          : stance === "oppose"  ? "text-red-600"
-          : "";
 
           const row = document.createElement("div");
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
+              <!-- dot removed by request -->
               <div class="flex flex-col">
-                <span class="text-sm font-medium">${label}</span>
-                ${billHtml}
+                <span class="text-sm font-medium">${issue.label || slug}</span>
+                ${issue.bill ? ( (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
+                    ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
+                    : `<span class="text-xs text-slate-600">${issue.bill}</span>`
+                  ) : "" }
               </div>
             </div>
-            <div class="flex items-center gap-1 text-xs text-slate-600" title="${STANCE_LABELS[stance]}" aria-label="${STANCE_LABELS[stance]}">
-              <span class="${iconColor}">${STANCE_ICONS[stance] || "❓"}</span>
-              <span>${STANCE_LABELS[stance]}</span>
+            <div class="flex items-center gap-1 text-xs text-slate-600">
+              ${stanceIcon(v.stance)}
+              <span class="ml-1">${STANCE_LABELS[v.stance]}</span>
             </div>`;
           grid.appendChild(row);
         }
 
         card.appendChild(grid);
-
-        if (allSlugs.length > MAX_ISSUES) {
-          const btn = document.createElement("button");
-          btn.className = "mt-2 text-xs underline text-indigo-700";
-          btn.textContent = expanded ? "Hide extra issues" : `Show all ${allSlugs.length}`;
-          btn.addEventListener("click", () => {
-            if (expanded) EXPANDED.delete(repKey); else EXPANDED.add(repKey);
-            renderReps(reps, issues, selectedSet);
-          });
-          card.appendChild(btn);
-        }
-
         resultsEl.appendChild(card);
       }
     }
