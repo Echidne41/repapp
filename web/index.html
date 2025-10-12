@@ -18,22 +18,25 @@
 
     <div id="status" class="mt-3 text-sm text-slate-700"></div>
 
-    <!-- Issues accordion (collapsed by default) -->
+    <!-- Issues controls -->
     <div class="mt-4">
-      <!-- Tappable bar -->
-      <button id="issuesToggle"
-              class="w-full flex items-center justify-between px-3 py-2 rounded-lg border bg-white text-left"
-              aria-controls="issuesPanel" aria-expanded="false">
-        <span class="text-sm font-medium">Show issues</span>
-        <span aria-hidden="true" class="text-slate-500">▾</span>
-      </button>
-
-      <!-- Collapsible panel -->
-      <div id="issuesPanel" class="mt-2 hidden">
-        <div class="flex items-center justify-end gap-2">
+      <div class="flex items-center justify-between gap-2">
+        <!-- Tappable bar -->
+        <button id="issuesToggle"
+                class="flex-1 flex items-center justify-between px-3 py-2 rounded-lg border bg-white text-left"
+                aria-controls="issuesPanel" aria-expanded="false">
+          <span class="text-sm font-medium">Select issues</span>
+          <span aria-hidden="true" class="text-slate-500">▾</span>
+        </button>
+        <!-- Keep these beside the button -->
+        <div class="flex items-center gap-3 shrink-0 pl-1">
           <button id="selectAllBtn" class="text-xs underline text-indigo-700">Select all</button>
           <button id="clearBtn" class="text-xs underline text-indigo-700">Clear</button>
         </div>
+      </div>
+
+      <!-- Collapsible panel -->
+      <div id="issuesPanel" class="mt-2 hidden">
         <!-- One column only -->
         <div id="issueChecklist" class="mt-2 grid grid-cols-1 gap-2"></div>
       </div>
@@ -68,10 +71,24 @@
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
-    selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
-    clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
 
-    // Accordion toggle (restore reliable behavior + caret flip)
+    // Select all: check every issue in the list
+    selectAllBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set(LAST_ISSUES.map(i => i.slug));
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+    });
+
+    // Clear all: uncheck everything
+    clearBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      SELECTED = new Set();
+      renderChecklist(LAST_ISSUES);
+      renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
+    });
+
+    // Accordion toggle (caret flip + aria)
     toggleBtn.addEventListener("click", () => {
       panelEl.classList.toggle("hidden");
       const open = !panelEl.classList.contains("hidden");
@@ -95,7 +112,7 @@
       if (stance === "oppose") {
         return `<span class="text-base" aria-label="Opposes">❌</span>`;
       }
-      // Classic question mark, same size as others
+      // Neutral question mark, same size; greyed
       return `<span class="text-base text-gray-500" aria-label="No vote">❔</span>`;
     };
 
@@ -131,12 +148,12 @@
       }
     }
 
+    // Build the checklist (single column, no "All" option)
     function renderChecklist(issues) {
-      const items = [{ slug: "ALL", label: "All" }, ...issues];
       listEl.innerHTML = "";
-      items.forEach((it, idx) => {
+      issues.forEach((it, idx) => {
         const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.has("ALL") ? it.slug === "ALL" : SELECTED.has(it.slug);
+        const checked = SELECTED.has(it.slug);
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
@@ -146,13 +163,8 @@
         `;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (it.slug === "ALL") {
-            SELECTED = cb.checked ? new Set(["ALL"]) : new Set();
-          } else {
-            if (cb.checked) { SELECTED.delete("ALL"); SELECTED.add(it.slug); }
-            else { SELECTED.delete(it.slug); }
-          }
-          renderChecklist(issues);
+          if (cb.checked) { SELECTED.add(it.slug); }
+          else { SELECTED.delete(it.slug); }
           renderReps(LAST_REPS, issues, SELECTED);
         });
         listEl.appendChild(row);
@@ -169,8 +181,7 @@
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
-      const showAll = selectedSet.has("ALL");
-      const shownSlugs = showAll ? issues.map(i => i.slug) : [...selectedSet];
+      const shownSlugs = [...selectedSet]; // default empty → shows none
 
       for (const rep of reps) {
         const card = document.createElement("div");
@@ -203,7 +214,6 @@
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
-              <!-- dot removed by request -->
               <div class="flex flex-col">
                 <span class="text-sm font-medium">${issue.label || slug}</span>
                 ${issue.bill ? ( (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
