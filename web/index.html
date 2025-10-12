@@ -22,7 +22,8 @@
     <div class="mt-4">
       <!-- Tappable bar -->
       <button id="issuesToggle"
-              class="w-full flex items-center justify-between px-3 py-2 rounded-lg border bg-white text-left">
+              class="w-full flex items-center justify-between px-3 py-2 rounded-lg border bg-white text-left"
+              aria-controls="issuesPanel" aria-expanded="false">
         <span class="text-sm font-medium">Show issues</span>
         <span aria-hidden="true" class="text-slate-500">▾</span>
       </button>
@@ -69,8 +70,15 @@
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
     selectAllBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(["ALL"]); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
     clearBtn.addEventListener("click", (e) => { e.preventDefault(); SELECTED = new Set(); renderChecklist(LAST_ISSUES); renderReps(LAST_REPS, LAST_ISSUES, SELECTED); });
-    // Accordion toggle
-    toggleBtn.addEventListener("click", () => { panelEl.classList.toggle("hidden"); });
+
+    // Accordion toggle (restore reliable behavior + caret flip)
+    toggleBtn.addEventListener("click", () => {
+      panelEl.classList.toggle("hidden");
+      const open = !panelEl.classList.contains("hidden");
+      toggleBtn.setAttribute("aria-expanded", open ? "true" : "false");
+      const caret = toggleBtn.querySelector('[aria-hidden="true"]');
+      if (caret) caret.textContent = open ? "▴" : "▾";
+    });
 
     // --- small helpers ---
     const partyBadge = (party) => {
@@ -82,16 +90,14 @@
 
     const stanceIcon = (stance) => {
       if (stance === "support") {
-      return `<span class="text-base" aria-label="Supports">✅</span>`;
-   }
+        return `<span class="text-base" aria-label="Supports">✅</span>`;
+      }
       if (stance === "oppose") {
-      return `<span class="text-base" aria-label="Opposes">❌</span>`;
-   }
-  return `
-    <svg class="w-4 h-4 text-gray-500" viewBox="0 0 24 24" fill="currentColor" aria-label="No vote">
-      <path d="M12 2a10 10 0 100 20 10 10 0 000-20zm1 15h-2v-2h2v2zm1.9-7.1c-.3.5-.8.8-1.3 1.1-.6.3-1 .6-1 .9v1h-2v-1c0-1.3 1-2 1.7-2.4.5-.3.8-.5.9-.8.2-.5-.2-1.1-.9-1.1-.7 0-1.1.4-1.3 1l-1.8-.8C8.8 6 10 5 12 5c1.9 0 3.2 1.2 3.2 2.7 0 .7-.2 1.4-.3 1.2z"/>
-    </svg>`;
-};
+        return `<span class="text-base" aria-label="Opposes">❌</span>`;
+      }
+      // Classic question mark, same size as others
+      return `<span class="text-base text-gray-500" aria-label="No vote">❓</span>`;
+    };
 
     async function lookup() {
       const a = (addrEl.value || "").trim();
@@ -170,16 +176,18 @@
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
-        // Header with party badge colors
+        // Header with party badge colors; district under name (left side)
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         const party = rep.party || "";
         header.innerHTML = `
-          <div class="flex items-center">
-            <div class="text-lg font-semibold">${rep.name}</div>
-            ${partyBadge(party)}
+          <div class="flex-1">
+            <div class="flex items-center">
+              <div class="text-lg font-semibold">${rep.name}</div>
+              ${partyBadge(party)}
+            </div>
+            <div class="text-sm text-slate-600 mt-1">${rep.district || ""}</div>
           </div>
-          <div class="text-sm text-slate-600">${rep.district || ""}</div>
         `;
         card.appendChild(header);
 
