@@ -108,7 +108,7 @@
       try {
         const r = await fetch(`${API}/issues`);
         const data = await r.json();
-        LAST_ISSUES = data.issues || [];
+        LAST_ISSUES = (data.issues || []);
         renderChecklist(LAST_ISSUES);
       } catch (e) {
         console.error("Failed to preload issues", e);
@@ -118,6 +118,13 @@
     async function lookup() {
       const a = (addrEl.value || "").trim();
       if (!a) { addrEl.focus(); return; }
+
+      // AUTO-RETRACT the issues panel (keep selections intact)
+      panelEl.classList.add("hidden");
+      toggleBtn.setAttribute("aria-expanded", "false");
+      const caret = toggleBtn.querySelector('[aria-hidden="true"]');
+      if (caret) caret.textContent = "▾";
+
       resultsEl.innerHTML = "";
       statusEl.textContent = "Looking up…";
       try {
