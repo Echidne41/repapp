@@ -62,6 +62,7 @@
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     let SELECTED = new Set();
+    let BILL_DESCS = {}; // <— new: bill → one-liner map
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
@@ -115,11 +116,23 @@
       }
     }
 
+    // NEW: load bill descriptions JSON (web/bill_descriptions.json)
+    async function loadBillDescriptions() {
+      try {
+        const r = await fetch('bill_descriptions.json', { cache: 'no-store' });
+        if (!r.ok) return;
+        BILL_DESCS = await r.json();
+      } catch (e) {
+        // silent fail; descriptions are optional
+        BILL_DESCS = {};
+      }
+    }
+
+    // Auto-retract issues panel on search (keep selections)
     async function lookup() {
       const a = (addrEl.value || "").trim();
       if (!a) { addrEl.focus(); return; }
 
-      // AUTO-RETRACT the issues panel (keep selections intact)
       panelEl.classList.add("hidden");
       toggleBtn.setAttribute("aria-expanded", "false");
       const caret = toggleBtn.querySelector('[aria-hidden="true"]');
@@ -174,9 +187,11 @@
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
       const shownSlugs = [...selectedSet];
+
       for (const rep of reps) {
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
+
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         const party = rep.party || "";
@@ -189,21 +204,34 @@
             <div class="text-sm text-slate-600 mt-1">${rep.district || ""}</div>
           </div>`;
         card.appendChild(header);
+
         const grid = document.createElement("div");
         grid.className = "mt-3 grid grid-cols-1 gap-2";
+
         for (const slug of shownSlugs) {
           const issue = issueBySlug[slug];
           if (!issue) continue;
           const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
+
+          // derive description key from issue.bill (e.g., "HB1")
+          const billKey = (issue.bill || "").toUpperCase().trim();
+          const desc = BILL_DESCS[billKey];
+          const hasDesc = !!(desc && desc.trim());
+
           const row = document.createElement("div");
           row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
           row.innerHTML = `
             <div class="flex items-center gap-2">
               <div class="flex flex-col">
                 <span class="text-sm font-medium">${issue.label || slug}</span>
-                ${issue.bill ? ((issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
-                  ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
-                  : `<span class="text-xs text-slate-600">${issue.bill}</span>`) : ""}
+                ${
+                  issue.bill
+                    ? (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
+                      ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
+                      : `<span class="text-xs text-slate-600">${issue.bill}</span>`
+                    : ""
+                }
+                ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${desc.trim()}</p>` : ""}
               </div>
             </div>
             <div class="flex items-center gap-1 text-xs text-slate-600">
@@ -212,13 +240,15 @@
             </div>`;
           grid.appendChild(row);
         }
+
         card.appendChild(grid);
         resultsEl.appendChild(card);
       }
     }
 
-    // Preload issues and activate buttons on load
+    // Preload issues and bill descriptions on load
     fetchIssuesOnLoad();
+    loadBillDescriptions();
   </script>
 </body>
 </html>
