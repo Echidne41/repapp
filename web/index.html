@@ -60,29 +60,13 @@
         name: "Education & Youth",
         slugs: ["hb115_public_school_funding_vouchers","hb675_school_funding_cap","hb583_reducing_child_hunger","hb26_school_budget_cap_repeal","hb28_child_advocacy_services","hb214_public_school_funding","hb211_public_school_funding","hb212_higher_ed_funding"]
       },
-      {
-        key: "health",
-        name: "Health & Public Safety",
-        slugs: ["hb29_medicaid","hb23_vaccinations","hb27_family_planning_services","hb213_opioid_crisis"]
-      },
-      {
-        key: "rights",
-        name: "Civil Rights & Social Equity",
-        slugs: ["hb148_lgbtq_rights","hb22_protecting_trans_people","hb215_human_rights_commission","hb433_child_marriage","hb238_labor_rights"]
-      },
-      {
-        key: "environment",
-        name: "Environment & Infrastructure",
-        slugs: ["hcr4_environment_wind_power","hb210_supporting_the_arts"]
-      },
-      {
-        key: "democracy",
-        name: "Democracy & Civic Participation",
-        slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"]
-      }
+      { key: "health", name: "Health & Public Safety", slugs: ["hb29_medicaid","hb23_vaccinations","hb27_family_planning_services","hb213_opioid_crisis"] },
+      { key: "rights", name: "Civil Rights & Social Equity", slugs: ["hb148_lgbtq_rights","hb22_protecting_trans_people","hb215_human_rights_commission","hb433_child_marriage","hb238_labor_rights"] },
+      { key: "environment", name: "Environment & Infrastructure", slugs: ["hcr4_environment_wind_power","hb210_supporting_the_arts"] },
+      { key: "democracy", name: "Democracy & Civic Participation", slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"] }
     ];
 
-    // DOM references
+    // DOM
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -96,8 +80,8 @@
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     let SELECTED = new Set();
-    let BILL_DESCS = {};
-    let ATT = {};
+    let BILL_DESCS = {}; // bill → one-liner
+    let ATT = {};        // name → { percent: "…" }
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
@@ -139,6 +123,7 @@
       return `<span class="text-base text-gray-500" aria-label="No vote">❔</span>`;
     };
 
+    // Load issues on page load (so menu + buttons work immediately)
     async function fetchIssuesOnLoad() {
       try {
         const r = await fetch(`${API}/issues`);
@@ -148,6 +133,7 @@
       } catch (e) { console.error("Failed to preload issues", e); }
     }
 
+    // Load bill descriptions JSON
     async function loadBillDescriptions() {
       try {
         const r = await fetch('bill_descriptions.json', { cache: 'no-store' });
@@ -156,6 +142,7 @@
       } catch { BILL_DESCS = {}; }
     }
 
+    // Load attendance JSON (name-only keys)
     async function loadAttendance() {
       try {
         const r = await fetch('attendance.json', { cache: 'no-store' });
@@ -164,6 +151,7 @@
       } catch { ATT = {}; }
     }
 
+    // Search
     async function lookup() {
       const a = (addrEl.value || "").trim();
       if (!a) { addrEl.focus(); return; }
@@ -183,23 +171,25 @@
           throw new Error(`HTTP ${r.status}`);
         }
         const data = await r.json();
-        LAST_REPS = data.reps || [];
-
-        // ✅ PIN attendance to rep objects
-        LAST_REPS = LAST_REPS.map(r => {
-          const match = ATT[r.name];
-          if (match) r.attendance = match.percent;
-          return r;
+        LAST_REPS = (data.reps || []).map(rep => {
+          // Pin the attendance value by name (verbatim)
+          const rec = ATT[rep.name];
+          if (rec && rec.percent != null) {
+            rep.attendance = String(rec.percent).trim();
+          }
+          return rep;
         });
 
         const districts = [];
         if (data.base_district || data.base_code) districts.push(data.base_district || data.base_code);
         if (Array.isArray(data.floterials)) districts.push(...data.floterials);
         statusEl.textContent = districts.filter(Boolean).join(" · ");
+
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch { statusEl.textContent = "Error contacting server."; }
     }
 
+    // Build the CATEGORY checklist (single column)
     function renderChecklist() {
       listEl.innerHTML = "";
       CATEGORIES.forEach((cat, idx) => {
@@ -228,6 +218,7 @@
         return;
       }
 
+      // Map issues by slug for quick lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
@@ -235,7 +226,7 @@
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
-        // Header with attendance tag (pinned field)
+        // Header (with attendance tag on the right)
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         const party = rep.party || "";
@@ -249,31 +240,37 @@
           </div>
           <div class="ml-3 flex items-center">
             ${rep.attendance
-              ? `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="Vote attendance">${rep.attendance}</span>`
+              ? `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="Present to Vote">${"Present to Vote: " + rep.attendance}</span>`
               : ""}
           </div>
         `;
         card.appendChild(header);
 
+        // Category sections
         const container = document.createElement("div");
         container.className = "mt-3 space-y-3";
         const activeCats = CATEGORIES.filter(c => selectedCats.has(c.key));
 
         for (const cat of activeCats) {
+          // Category title bar
           const bar = document.createElement("div");
           bar.className = "px-3 py-2 rounded-lg bg-slate-100 border text-sm font-medium text-slate-800";
           bar.textContent = cat.name;
           container.appendChild(bar);
 
+          // Issue rows for this category
           const block = document.createElement("div");
           block.className = "grid grid-cols-1 gap-2";
+
           for (const slug of cat.slugs) {
             const issue = issueBySlug[slug];
             if (!issue) continue;
             const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
+
             const billKey = (issue.bill || "").toUpperCase().trim();
             const desc = BILL_DESCS[billKey];
-            const hasDesc = !!(desc && desc.trim());
+            const hasDesc = !!(desc && String(desc).trim());
+
             const row = document.createElement("div");
             row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
             row.innerHTML = `
@@ -287,7 +284,7 @@
                         : `<span class="text-xs text-slate-600">${issue.bill}</span>`
                       : ""
                   }
-                  ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${desc.trim()}</p>` : ""}
+                  ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${String(desc).trim()}</p>` : ""}
                 </div>
               </div>
               <div class="flex items-center gap-1 text-xs text-slate-600">
@@ -296,6 +293,7 @@
               </div>`;
             block.appendChild(row);
           }
+
           container.appendChild(block);
         }
 
@@ -304,7 +302,7 @@
       }
     }
 
-    // Load everything on start
+    // Load everything on start (order doesn’t matter; we pin after lookup)
     fetchIssuesOnLoad();
     loadBillDescriptions();
     loadAttendance();
