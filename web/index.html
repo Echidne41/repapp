@@ -212,11 +212,12 @@
     }
 
     function renderReps(reps, issues, selectedCats) {
-      resultsEl.innerHTML = "";
-      if (!reps.length) {
-        resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
-        return;
-      }
+  // Don’t show a placeholder before the first successful lookup
+  if (!reps || !reps.length) { 
+    resultsEl.innerHTML = ""; 
+    return; 
+  }
+
 
       // Map issues by slug for quick lookup
       const issueBySlug = {};
