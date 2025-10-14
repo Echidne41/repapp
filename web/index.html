@@ -49,6 +49,42 @@
 
     const STANCE_LABELS = { support: "Supports", oppose: "Opposes", no_vote: "No vote" };
 
+    // --- CATEGORY DEFINITIONS (keys + display names + member issue slugs) ---
+    // NOTE: Categories may overlap on purpose.
+    const CATEGORIES = [
+      {
+        key: "budget",
+        name: "Budget & Fiscal Policy",
+        slugs: ["hb1_state_funding_bill","hb2_budget_trailer","hb25_dems_budget_proposal","hb26_school_budget_cap_repeal","hb211_public_school_funding","hb212_higher_ed_funding","hb214_public_school_funding"]
+      },
+      {
+        key: "education",
+        name: "Education & Youth",
+        slugs: ["hb115_public_school_funding_vouchers","hb675_school_funding_cap","hb583_reducing_child_hunger","hb26_school_budget_cap_repeal","hb28_child_advocacy_services","hb214_public_school_funding","hb211_public_school_funding","hb212_higher_ed_funding"]
+      },
+      {
+        key: "health",
+        name: "Health & Public Safety",
+        slugs: ["hb29_medicaid","hb23_vaccinations","hb27_family_planning_services","hb213_opioid_crisis"]
+      },
+      {
+        key: "rights",
+        name: "Civil Rights & Social Equity",
+        slugs: ["hb148_lgbtq_rights","hb22_protecting_trans_people","hb215_human_rights_commission","hb433_child_marriage","hb238_labor_rights"]
+      },
+      {
+        key: "environment",
+        name: "Environment & Infrastructure",
+        slugs: ["hcr4_environment_wind_power","hb210_supporting_the_arts"]
+      },
+      {
+        key: "democracy",
+        name: "Democracy & Civic Participation",
+        slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"]
+      }
+    ];
+
+    // DOM
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -59,10 +95,10 @@
     const toggleBtn = document.getElementById("issuesToggle");
     const panelEl = document.getElementById("issuesPanel");
 
-    let LAST_ISSUES = [];
-    let LAST_REPS = [];
-    let SELECTED = new Set();
-    let BILL_DESCS = {}; // <— new: bill → one-liner map
+    let LAST_ISSUES = [];   // full issue objects from API (for bill/link rendering)
+    let LAST_REPS = [];     // reps array from API
+    let SELECTED = new Set(); // holds selected category keys
+    let BILL_DESCS = {};    // bill → one-liner map (optional JSON)
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
@@ -76,18 +112,18 @@
       if (caret) caret.textContent = open ? "▴" : "▾";
     });
 
-    // Select all / clear all handlers
+    // Select all / clear all act on categories
     selectAllBtn.addEventListener("click", (e) => {
       e.preventDefault();
-      SELECTED = new Set(LAST_ISSUES.map(i => i.slug));
-      renderChecklist(LAST_ISSUES);
+      SELECTED = new Set(CATEGORIES.map(c => c.key));
+      renderChecklist();
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
     });
 
     clearBtn.addEventListener("click", (e) => {
       e.preventDefault();
       SELECTED = new Set();
-      renderChecklist(LAST_ISSUES);
+      renderChecklist();
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
     });
 
@@ -100,7 +136,7 @@
 
     const stanceIcon = (stance) => {
       if (stance === "support") return `<span class="text-base" aria-label="Supports">✅</span>`;
-      if (stance === "oppose") return `<span class="text-base" aria-label="Opposes">❌</span>`;
+      if (stance === "oppose")  return `<span class="text-base" aria-label="Opposes">❌</span>`;
       return `<span class="text-base text-gray-500" aria-label="No vote">❔</span>`;
     };
 
@@ -110,20 +146,19 @@
         const r = await fetch(`${API}/issues`);
         const data = await r.json();
         LAST_ISSUES = (data.issues || []);
-        renderChecklist(LAST_ISSUES);
+        renderChecklist(); // build category checklist
       } catch (e) {
         console.error("Failed to preload issues", e);
       }
     }
 
-    // NEW: load bill descriptions JSON (web/bill_descriptions.json)
+    // Load optional bill descriptions JSON (if present)
     async function loadBillDescriptions() {
       try {
         const r = await fetch('bill_descriptions.json', { cache: 'no-store' });
         if (!r.ok) return;
         BILL_DESCS = await r.json();
-      } catch (e) {
-        // silent fail; descriptions are optional
+      } catch {
         BILL_DESCS = {};
       }
     }
@@ -151,47 +186,57 @@
         }
         const data = await r.json();
         LAST_REPS = data.reps || [];
+        // status string unchanged
+        const districts = [];
+        if (data.base_district || data.base_code) districts.push(data.base_district || data.base_code);
+        if (Array.isArray(data.floterials)) districts.push(...data.floterials);
+        statusEl.textContent = districts.filter(Boolean).join(" · ");
+
         renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
       } catch {
         statusEl.textContent = "Error contacting server.";
       }
     }
 
-    function renderChecklist(issues) {
+    // Build the CATEGORY checklist (single column)
+    function renderChecklist() {
       listEl.innerHTML = "";
-      issues.forEach((it, idx) => {
-        const id = `iss_${idx}_${it.slug}`;
-        const checked = SELECTED.has(it.slug);
+      CATEGORIES.forEach((cat, idx) => {
+        const id = `cat_${idx}_${cat.key}`;
+        const checked = SELECTED.has(cat.key);
         const row = document.createElement("label");
         row.className = "flex items-center gap-2 rounded-lg border bg-white px-3 py-2";
         row.htmlFor = id;
         row.innerHTML = `
           <input id="${id}" type="checkbox" ${checked ? "checked" : ""} class="h-4 w-4">
-          <span class="text-sm">${it.label || it.slug}</span>`;
+          <span class="text-sm">${cat.name}</span>`;
         const cb = row.querySelector("input");
         cb.addEventListener("change", () => {
-          if (cb.checked) SELECTED.add(it.slug);
-          else SELECTED.delete(it.slug);
-          renderReps(LAST_REPS, issues, SELECTED);
+          if (cb.checked) SELECTED.add(cat.key);
+          else SELECTED.delete(cat.key);
+          renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
         });
         listEl.appendChild(row);
       });
     }
 
-    function renderReps(reps, issues, selectedSet) {
+    function renderReps(reps, issues, selectedCats) {
       resultsEl.innerHTML = "";
       if (!reps.length) {
         resultsEl.innerHTML = `<p class="text-sm text-slate-600">No reps found.</p>`;
         return;
       }
+
+      // Map issues by slug for quick lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
-      const shownSlugs = [...selectedSet];
 
+      // For each REP, render selected categories; under each, render all bills in that category
       for (const rep of reps) {
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
+        // Header with party and district under name (unchanged)
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         const party = rep.party || "";
@@ -205,43 +250,59 @@
           </div>`;
         card.appendChild(header);
 
-        const grid = document.createElement("div");
-        grid.className = "mt-3 grid grid-cols-1 gap-2";
+        // For each selected category, add a titled bar + its issue rows
+        const container = document.createElement("div");
+        container.className = "mt-3 space-y-3";
 
-        for (const slug of shownSlugs) {
-          const issue = issueBySlug[slug];
-          if (!issue) continue;
-          const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
+        const activeCats = CATEGORIES.filter(c => selectedCats.has(c.key));
+        for (const cat of activeCats) {
+          // Category title bar
+          const bar = document.createElement("div");
+          bar.className = "px-3 py-2 rounded-lg bg-slate-100 border text-sm font-medium text-slate-800";
+          bar.textContent = cat.name;
+          container.appendChild(bar);
 
-          // derive description key from issue.bill (e.g., "HB1")
-          const billKey = (issue.bill || "").toUpperCase().trim();
-          const desc = BILL_DESCS[billKey];
-          const hasDesc = !!(desc && desc.trim());
+          // Issue rows for this category
+          const block = document.createElement("div");
+          block.className = "grid grid-cols-1 gap-2";
 
-          const row = document.createElement("div");
-          row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
-          row.innerHTML = `
-            <div class="flex items-center gap-2">
-              <div class="flex flex-col">
-                <span class="text-sm font-medium">${issue.label || slug}</span>
-                ${
-                  issue.bill
-                    ? (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
-                      ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
-                      : `<span class="text-xs text-slate-600">${issue.bill}</span>`
-                    : ""
-                }
-                ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${desc.trim()}</p>` : ""}
+          for (const slug of cat.slugs) {
+            const issue = issueBySlug[slug];
+            if (!issue) continue; // skip if issue not in API payload
+            const v = (rep.votes && rep.votes[slug]) || { stance: "no_vote" };
+
+            // derive bill description
+            const billKey = (issue.bill || "").toUpperCase().trim();
+            const desc = BILL_DESCS[billKey];
+            const hasDesc = !!(desc && desc.trim());
+
+            const row = document.createElement("div");
+            row.className = "flex items-start justify-between rounded-lg px-3 py-2 bg-white border";
+            row.innerHTML = `
+              <div class="flex items-center gap-2">
+                <div class="flex flex-col">
+                  <span class="text-sm font-medium">${issue.label || slug}</span>
+                  ${
+                    issue.bill
+                      ? (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
+                        ? `<a class="text-xs text-indigo-700 underline" href="${issue.bill_url}" target="_blank" rel="noopener">${issue.bill}</a>`
+                        : `<span class="text-xs text-slate-600">${issue.bill}</span>`
+                      : ""
+                  }
+                  ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${desc.trim()}</p>` : ""}
+                </div>
               </div>
-            </div>
-            <div class="flex items-center gap-1 text-xs text-slate-600">
-              ${stanceIcon(v.stance)}
-              <span class="ml-1">${STANCE_LABELS[v.stance]}</span>
-            </div>`;
-          grid.appendChild(row);
+              <div class="flex items-center gap-1 text-xs text-slate-600">
+                ${stanceIcon(v.stance)}
+                <span class="ml-1">${STANCE_LABELS[v.stance]}</span>
+              </div>`;
+            block.appendChild(row);
+          }
+
+          container.appendChild(block);
         }
 
-        card.appendChild(grid);
+        card.appendChild(container);
         resultsEl.appendChild(card);
       }
     }
