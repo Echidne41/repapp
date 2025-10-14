@@ -102,7 +102,7 @@
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
 
-    // Toggle accordion
+    // Accordion toggle
     toggleBtn.addEventListener("click", () => {
       panelEl.classList.toggle("hidden");
       const open = !panelEl.classList.contains("hidden");
@@ -138,16 +138,6 @@
       if (stance === "oppose")  return `<span class="text-base" aria-label="Opposes">❌</span>`;
       return `<span class="text-base text-gray-500" aria-label="No vote">❔</span>`;
     };
-
-    // Attendance tag helper
-    function attendanceTag(rep) {
-      const key = `${rep.name}|${rep.district || ""}`.trim();
-      const rec = ATT[key];
-      if (!rec) return "";
-      const pct = rec.percent;
-      if (pct === undefined || pct === null) return "";
-      return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="${pct}% of votes missed">${pct}% missed</span>`;
-    }
 
     async function fetchIssuesOnLoad() {
       try {
@@ -194,6 +184,14 @@
         }
         const data = await r.json();
         LAST_REPS = data.reps || [];
+
+        // ✅ PIN attendance to rep objects
+        LAST_REPS = LAST_REPS.map(r => {
+          const match = ATT[r.name];
+          if (match) r.attendance = match.percent;
+          return r;
+        });
+
         const districts = [];
         if (data.base_district || data.base_code) districts.push(data.base_district || data.base_code);
         if (Array.isArray(data.floterials)) districts.push(...data.floterials);
@@ -237,7 +235,7 @@
         const card = document.createElement("div");
         card.className = "bg-white border rounded-xl p-4 shadow-sm";
 
-        // Header with attendance tag
+        // Header with attendance tag (pinned field)
         const header = document.createElement("div");
         header.className = "flex items-baseline justify-between";
         const party = rep.party || "";
@@ -249,7 +247,11 @@
             </div>
             <div class="text-sm text-slate-600 mt-1">${rep.district || ""}</div>
           </div>
-          <div class="ml-3 flex items-center">${attendanceTag(rep)}</div>
+          <div class="ml-3 flex items-center">
+            ${rep.attendance
+              ? `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="Vote attendance">${rep.attendance}</span>`
+              : ""}
+          </div>
         `;
         card.appendChild(header);
 
