@@ -213,8 +213,10 @@ def _geocode_osm_nominatim(q: str, city: Optional[str], zip5: Optional[str]):
 
 def _geocode_census(one_line: str):
     """
-    Try structured Census first (NH-scoped), then OSM, then Census oneline.
-    This fixes failures for '95 Alta Blvd, Lebanon, NH 03766' and bare '95 Alta Blvd'.
+    NH-first geocoding:
+    1) Census structured (state=NH)  -> best for addresses
+    2) Census oneline                -> stable fallback
+    3) OSM/Nominatim                 -> last-resort for brand-new roads
     """
     if not one_line:
         return None, None, ""
@@ -225,12 +227,7 @@ def _geocode_census(one_line: str):
     if lat is not None and lon is not None:
         return lat, lon, town
 
-    # 2) OSM (better for brand-new/private roads)
-    lat, lon, town = _geocode_osm_nominatim(street or one_line, city or None, zip5)
-    if lat is not None and lon is not None:
-        return lat, lon, town
-
-    # 3) Census oneline (last)
+    # 2) Census one-line (stable)
     url = "https://geocoding.geo.census.gov/geocoder/locations/onelineaddress"
     params = {"address": one_line, "benchmark": "Public_AR_Current", "format": "json"}
     try:
@@ -249,7 +246,8 @@ def _geocode_census(one_line: str):
     except Exception:
         pass
 
-    return None, None, ""
+    # 3) OSM last (brand-new stuff only)
+    return _geocode_osm_nominatim(street or one_line, city or None, zip5)
 
 def _base_from_point(lat: float, lon: float):
     """Point-in-polygon on base districts; accept boundary touches."""
