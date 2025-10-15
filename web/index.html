@@ -66,7 +66,7 @@
       { key: "democracy", name: "Democracy & Civic Participation", slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"] }
     ];
 
-    // DOM
+    // DOM references
     const addrEl = document.getElementById("addr");
     const goEl = document.getElementById("go");
     const statusEl = document.getElementById("status");
@@ -80,8 +80,8 @@
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     let SELECTED = new Set();
-    let BILL_DESCS = {}; // bill → one-liner
-    let ATT = {};        // name → { percent: "…" }
+    let BILL_DESCS = {};
+    let ATT = {};
 
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
@@ -123,7 +123,7 @@
       return `<span class="text-base text-gray-500" aria-label="No vote">❔</span>`;
     };
 
-    // Load issues on page load (so menu + buttons work immediately)
+    // Load issues on page load
     async function fetchIssuesOnLoad() {
       try {
         const r = await fetch(`${API}/issues`);
@@ -172,11 +172,8 @@
         }
         const data = await r.json();
         LAST_REPS = (data.reps || []).map(rep => {
-          // Pin the attendance value by name (verbatim)
           const rec = ATT[rep.name];
-          if (rec && rec.percent != null) {
-            rep.attendance = String(rec.percent).trim();
-          }
+          if (rec && rec.percent != null) rep.attendance = String(rec.percent).trim();
           return rep;
         });
 
@@ -189,7 +186,6 @@
       } catch { statusEl.textContent = "Error contacting server."; }
     }
 
-    // Build the CATEGORY checklist (single column)
     function renderChecklist() {
       listEl.innerHTML = "";
       CATEGORIES.forEach((cat, idx) => {
@@ -212,14 +208,9 @@
     }
 
     function renderReps(reps, issues, selectedCats) {
-  // Don’t show a placeholder before the first successful lookup
-  if (!reps || !reps.length) { 
-    resultsEl.innerHTML = ""; 
-    return; 
-  }
+      // Don’t render placeholder before first lookup
+      if (!reps || !reps.length) { resultsEl.innerHTML = ""; return; }
 
-
-      // Map issues by slug for quick lookup
       const issueBySlug = {};
       issues.forEach(i => issueBySlug[i.slug] = i);
 
@@ -253,15 +244,15 @@
         const activeCats = CATEGORIES.filter(c => selectedCats.has(c.key));
 
         for (const cat of activeCats) {
-          // Category title bar
+          // Category title bar — BIGGER + BOLD (only change here)
           const bar = document.createElement("div");
-          bar.className = "px-3 py-2 rounded-lg bg-slate-100 border text-sm font-medium text-slate-800";
+          bar.className = "px-3 py-2 rounded-lg bg-slate-100 border text-base font-semibold text-slate-800";
           bar.textContent = cat.name;
           container.appendChild(bar);
 
-          // Issue rows for this category
+          // Issue rows for this category — INDENT the block (only change here)
           const block = document.createElement("div");
-          block.className = "grid grid-cols-1 gap-2";
+          block.className = "grid grid-cols-1 gap-2 pl-4";
 
           for (const slug of cat.slugs) {
             const issue = issueBySlug[slug];
@@ -277,7 +268,8 @@
             row.innerHTML = `
               <div class="flex items-center gap-2">
                 <div class="flex flex-col">
-                  <span class="text-sm font-medium">${issue.label || slug}</span>
+                  <!-- BULLET on the issue title (only change here) -->
+                  <span class="text-sm font-medium">• ${issue.label || slug}</span>
                   ${
                     issue.bill
                       ? (issue.bill_url && /^https?:\/\//i.test(issue.bill_url))
@@ -285,7 +277,8 @@
                         : `<span class="text-xs text-slate-600">${issue.bill}</span>`
                       : ""
                   }
-                  ${hasDesc ? `<p class="text-xs text-slate-600 leading-snug mt-1">${String(desc).trim()}</p>` : ""}
+                  <!-- Make the explanation ITALIC (only change here) -->
+                  ${hasDesc ? `<p class="text-xs text-slate-600 italic leading-snug mt-1">${String(desc).trim()}</p>` : ""}
                 </div>
               </div>
               <div class="flex items-center gap-1 text-xs text-slate-600">
