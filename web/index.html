@@ -42,6 +42,7 @@
   </div>
 
   <script>
+    // API base
     const API = location.hostname.endsWith('vercel.app')
       ? 'https://repapp-9lq6.onrender.com'
       : '';
@@ -50,20 +51,18 @@
 
     // --- CATEGORY DEFINITIONS ---
     const CATEGORIES = [
-      {
-        key: "budget",
-        name: "Budget & Fiscal Policy",
-        slugs: ["hb1_state_funding_bill","hb2_budget_trailer","hb25_dems_budget_proposal","hb26_school_budget_cap_repeal","hb211_public_school_funding","hb212_higher_ed_funding","hb214_public_school_funding"]
-      },
-      {
-        key: "education",
-        name: "Education & Youth",
-        slugs: ["hb115_public_school_funding_vouchers","hb675_school_funding_cap","hb583_reducing_child_hunger","hb26_school_budget_cap_repeal","hb28_child_advocacy_services","hb214_public_school_funding","hb211_public_school_funding","hb212_higher_ed_funding"]
-      },
-      { key: "health", name: "Health & Public Safety", slugs: ["hb29_medicaid","hb23_vaccinations","hb27_family_planning_services","hb213_opioid_crisis"] },
-      { key: "rights", name: "Civil Rights & Social Equity", slugs: ["hb148_lgbtq_rights","hb22_protecting_trans_people","hb215_human_rights_commission","hb433_child_marriage","hb238_labor_rights"] },
-      { key: "environment", name: "Environment & Infrastructure", slugs: ["hcr4_environment_wind_power","hb210_supporting_the_arts"] },
-      { key: "democracy", name: "Democracy & Civic Participation", slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"] }
+      { key: "budget", name: "Budget & Fiscal Policy",
+        slugs: ["hb1_state_funding_bill","hb2_budget_trailer","hb25_dems_budget_proposal","hb26_school_budget_cap_repeal","hb211_public_school_funding","hb212_higher_ed_funding","hb214_public_school_funding"] },
+      { key: "education", name: "Education & Youth",
+        slugs: ["hb115_public_school_funding_vouchers","hb675_school_funding_cap","hb583_reducing_child_hunger","hb26_school_budget_cap_repeal","hb28_child_advocacy_services","hb214_public_school_funding","hb211_public_school_funding","hb212_higher_ed_funding"] },
+      { key: "health", name: "Health & Public Safety",
+        slugs: ["hb29_medicaid","hb23_vaccinations","hb27_family_planning_services","hb213_opioid_crisis"] },
+      { key: "rights", name: "Civil Rights & Social Equity",
+        slugs: ["hb148_lgbtq_rights","hb22_protecting_trans_people","hb215_human_rights_commission","hb433_child_marriage","hb238_labor_rights"] },
+      { key: "environment", name: "Environment & Infrastructure",
+        slugs: ["hcr4_environment_wind_power","hb210_supporting_the_arts"] },
+      { key: "democracy", name: "Democracy & Civic Participation",
+        slugs: ["hb521_voter_protection","hb75_legalizing_marijuana","hcr7_reproductive_freedom"] }
     ];
 
     // DOM references
@@ -80,9 +79,41 @@
     let LAST_ISSUES = [];
     let LAST_REPS = [];
     let SELECTED = new Set();
-    let BILL_DESCS = {};
-    let ATT = {};
+    let BILL_DESCS = {}; // bill → one-liner
+    let ATT = {};        // name → { percent: "…" }
+    let NATT = {};       // normalized name → { percent: "…" }
 
+    // --- Name normalization for attendance matching (NEW) ---
+    const NICK_CANON = {
+      jen:"jennifer", jenny:"jennifer",
+      liz:"elizabeth", beth:"elizabeth", eliza:"elizabeth",
+      kate:"katherine", katie:"katherine", kat:"katherine",
+      mike:"michael", bill:"william", will:"william", billy:"william", liam:"william",
+      bob:"robert", rob:"robert", bobby:"robert", bert:"robert",
+      rick:"richard", dick:"richard", rich:"richard",
+      jack:"john", johnny:"john",
+      jim:"james", jimmy:"james",
+      andy:"andrew", drew:"andrew",
+      tony:"anthony", tom:"thomas", tommy:"thomas",
+      chris:"christopher", kris:"christopher",
+      maggie:"margaret", meg:"margaret", peggy:"margaret",
+      sue:"susan", suzy:"susan", larry:"lawrence",
+      ben:"benjamin", sam:"samuel", joe:"joseph"
+    };
+    function normName(s) {
+      if (!s) return "";
+      let t = String(s).toLowerCase().replace(/[.\u2019’]/g, "").trim();
+      let parts = t.split(/\s+/).filter(Boolean);
+      if (parts.length) {
+        const mapped = NICK_CANON[parts[0]] || parts[0];
+        parts[0] = mapped;
+      }
+      // drop single-letter middle initials
+      parts = parts.filter(p => p.length > 1 || /^[a-z]+$/.test(p));
+      return parts.join(" ");
+    }
+
+    // Events
     goEl.addEventListener("click", lookup);
     addrEl.addEventListener("keydown", (e) => { if (e.key === "Enter") lookup(); });
 
@@ -102,7 +133,6 @@
       renderChecklist();
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
     });
-
     clearBtn.addEventListener("click", (e) => {
       e.preventDefault();
       SELECTED = new Set();
@@ -110,13 +140,13 @@
       renderReps(LAST_REPS, LAST_ISSUES, SELECTED);
     });
 
+    // UI helpers
     const partyBadge = (party) => {
       const p = (party || "").toLowerCase();
       if (p.startsWith("d")) return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 border border-blue-200">Democrat</span>`;
       if (p.startsWith("r")) return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-pink-100 text-pink-800 border border-pink-200">Republican</span>`;
       return `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">I</span>`;
     };
-
     const stanceIcon = (stance) => {
       if (stance === "support") return `<span class="text-base" aria-label="Supports">✅</span>`;
       if (stance === "oppose")  return `<span class="text-base" aria-label="Opposes">❌</span>`;
@@ -142,13 +172,17 @@
       } catch { BILL_DESCS = {}; }
     }
 
-    // Load attendance JSON (name-only keys)
+    // Load attendance JSON (name-only keys) and build normalized index (NEW)
     async function loadAttendance() {
       try {
         const r = await fetch('attendance.json', { cache: 'no-store' });
         if (!r.ok) return;
         ATT = await r.json();
-      } catch { ATT = {}; }
+        NATT = {};
+        for (const [name, rec] of Object.entries(ATT || {})) {
+          NATT[normName(name)] = rec;
+        }
+      } catch { ATT = {}; NATT = {}; }
     }
 
     // Search
@@ -171,8 +205,10 @@
           throw new Error(`HTTP ${r.status}`);
         }
         const data = await r.json();
+
+        // pin reps and attendance (use normalized lookup first)
         LAST_REPS = (data.reps || []).map(rep => {
-          const rec = ATT[rep.name];
+          const rec = NATT[normName(rep.name)] || ATT[rep.name];
           if (rec && rec.percent != null) rep.attendance = String(rec.percent).trim();
           return rep;
         });
@@ -186,6 +222,7 @@
       } catch { statusEl.textContent = "Error contacting server."; }
     }
 
+    // Category checklist
     function renderChecklist() {
       listEl.innerHTML = "";
       CATEGORIES.forEach((cat, idx) => {
@@ -207,6 +244,7 @@
       });
     }
 
+    // Render results
     function renderReps(reps, issues, selectedCats) {
       // Don’t render placeholder before first lookup
       if (!reps || !reps.length) { resultsEl.innerHTML = ""; return; }
@@ -232,7 +270,7 @@
           </div>
           <div class="ml-3 flex items-center">
             ${rep.attendance
-              ? `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="Present to Vote">${"Present to Vote: " + rep.attendance}</span>`
+              ? `<span class="ml-2 text-[11px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 border border-slate-200" title="Present to Vote">Present to Vote: ${rep.attendance}</span>`
               : ""}
           </div>
         `;
@@ -244,13 +282,13 @@
         const activeCats = CATEGORIES.filter(c => selectedCats.has(c.key));
 
         for (const cat of activeCats) {
-          // Category title bar — BIGGER + BOLD (only change here)
+          // Category title bar — bigger + bold
           const bar = document.createElement("div");
           bar.className = "px-3 py-2 rounded-lg bg-slate-100 border text-base font-semibold text-slate-800";
           bar.textContent = cat.name;
           container.appendChild(bar);
 
-          // Issue rows for this category — INDENT the block (only change here)
+          // Issue rows — indented block
           const block = document.createElement("div");
           block.className = "grid grid-cols-1 gap-2 pl-4";
 
@@ -268,7 +306,7 @@
             row.innerHTML = `
               <div class="flex items-center gap-2">
                 <div class="flex flex-col">
-                  <!-- BULLET on the issue title (only change here) -->
+                  <!-- Bullet before issue title -->
                   <span class="text-sm font-medium">• ${issue.label || slug}</span>
                   ${
                     issue.bill
@@ -277,7 +315,6 @@
                         : `<span class="text-xs text-slate-600">${issue.bill}</span>`
                       : ""
                   }
-                  <!-- Make the explanation ITALIC (only change here) -->
                   ${hasDesc ? `<p class="text-xs text-slate-600 italic leading-snug mt-1">${String(desc).trim()}</p>` : ""}
                 </div>
               </div>
@@ -296,7 +333,7 @@
       }
     }
 
-    // Load everything on start (order doesn’t matter; we pin after lookup)
+    // Load everything on start
     fetchIssuesOnLoad();
     loadBillDescriptions();
     loadAttendance();
